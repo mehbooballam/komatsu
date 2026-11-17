@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
@@ -364,9 +364,8 @@ export default function DashboardPage() {
   const [mapData, setMapData] = useState<MapData | null>(null);
   const [paretoData, setParetoData] = useState<ParetoData | null>(null);
   const [userName, setUserName] = useState<string>("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [loaded, setLoaded] = useState<{ key: number; error: string | null } | null>(null);
   const [attention, setAttention] = useState<Record<string, number> | null>(null);
   const [tableTab, setTableTab] = useState<string>("priority");
   const [mixView, setMixView] = useState<"final" | "score">("final");
@@ -376,43 +375,50 @@ export default function DashboardPage() {
   const canEdit = session?.membership.role !== "risk_owner";
   const canDelete = session?.membership.role === "company_admin" || session?.membership.role === "manager";
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [summaryRes, mapRes, paretoRes, meRes] = await Promise.all([
-        fetch("/api/dashboard/summary"),
-        fetch("/api/dashboard/map"),
-        fetch("/api/dashboard/pareto"),
-        fetch("/api/users/me"),
-      ]);
-
-      if (summaryRes.status === 401) {
-        router.push("/login");
-        return;
-      }
-      if (!summaryRes.ok || !mapRes.ok || !paretoRes.ok) {
-        throw new Error("Failed to load dashboard data");
-      }
-
-      const [summaryJson, mapJson, paretoJson] = await Promise.all([summaryRes.json(), mapRes.json(), paretoRes.json()]);
-      setSummary(summaryJson);
-      setMapData(mapJson);
-      setParetoData(paretoJson);
-      if (meRes.ok) {
-        const me = await meRes.json();
-        setUserName((me?.user?.display_name || "").split(" ")[0]);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
-    } finally {
-      setLoading(false);
-    }
-  }, [router]);
+  // Loading/error belong to a specific reloadKey, so starting a reload needs no setState
+  const loading = loaded?.key !== reloadKey;
+  const error = loaded?.key === reloadKey ? loaded.error : null;
+  const fetchData = () => setReloadKey((k) => k + 1);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData, reloadKey]);
+    let cancelled = false;
+    const key = reloadKey;
+    (async () => {
+      let failure: string | null = null;
+      try {
+        const [summaryRes, mapRes, paretoRes, meRes] = await Promise.all([
+          fetch("/api/dashboard/summary"),
+          fetch("/api/dashboard/map"),
+          fetch("/api/dashboard/pareto"),
+          fetch("/api/users/me"),
+        ]);
+
+        if (summaryRes.status === 401) {
+          router.push("/login");
+          return;
+        }
+        if (!summaryRes.ok || !mapRes.ok || !paretoRes.ok) {
+          throw new Error("Failed to load dashboard data");
+        }
+
+        const [summaryJson, mapJson, paretoJson] = await Promise.all([summaryRes.json(), mapRes.json(), paretoRes.json()]);
+        if (cancelled) return;
+        setSummary(summaryJson);
+        setMapData(mapJson);
+        setParetoData(paretoJson);
+        if (meRes.ok) {
+          const me = await meRes.json();
+          if (!cancelled) setUserName((me?.user?.display_name || "").split(" ")[0]);
+        }
+      } catch (err) {
+        failure = err instanceof Error ? err.message : "An error occurred";
+      }
+      if (!cancelled) setLoaded({ key, error: failure });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router, reloadKey]);
 
   // Action counts (each is just the total of a filtered alert query)
   useEffect(() => {

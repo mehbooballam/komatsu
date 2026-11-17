@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { addMonths, differenceInCalendarDays, endOfMonth, isAfter, isBefore, isEqual, startOfDay } from "date-fns";
 
 import {
@@ -481,6 +482,5 @@ export function calculateFullAssessment(params: {
 }
 
 function hashObject(obj: Record<string, unknown>): string {
-  const crypto = require("crypto");
   return crypto.createHash("sha256").update(JSON.stringify(obj)).digest("hex").slice(0, 32);
 }

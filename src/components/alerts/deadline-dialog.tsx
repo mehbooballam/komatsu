@@ -87,9 +87,19 @@ export function DeadlineDialog({ alertId, alertTitle, onClose, onChanged, canEdi
     setDeadlines(res.ok ? body.deadlines || [] : []);
   }, [alertId]);
 
+  // Initial load; setState only runs once the request resolves
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+    fetch(`/api/alerts/${alertId}/deadline`)
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setDeadlines(res.ok ? body.deadlines || [] : []);
+      })
+      .catch(() => !cancelled && setDeadlines([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [alertId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && !busy && onClose();

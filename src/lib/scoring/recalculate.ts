@@ -62,7 +62,7 @@ export async function recalculateAlert(
   const policyVersion = policyRes.rows.length > 0 ? policyRes.rows[0].version : 1;
   const policyId = policyRes.rows.length > 0 ? policyRes.rows[0].id : null;
 
-  let sourceRatings: SourceRatings = {
+  const sourceRatings: SourceRatings = {
     market_access: null,
     cost_to_implement: null,
     human_resources: null,

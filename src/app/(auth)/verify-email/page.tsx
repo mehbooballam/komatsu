@@ -8,18 +8,20 @@ import { Suspense } from "react";
 function VerifyContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") || "";
-  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
-  const [message, setMessage] = useState("");
+  const [result, setResult] = useState<{ status: "loading" | "success" | "error"; message: string }>(
+    token ? { status: "loading", message: "" } : { status: "error", message: "Missing verification token." }
+  );
+  const { status, message } = result;
 
   useEffect(() => {
-    if (!token) { setStatus("error"); setMessage("Missing verification token."); return; }
+    if (!token) return;
     fetch(`/api/auth/verify-email?token=${encodeURIComponent(token)}`)
       .then(async (res) => {
         const data = await res.json();
-        if (res.ok) { setStatus("success"); setMessage("Email verified successfully!"); }
-        else { setStatus("error"); setMessage(data.error || "Verification failed."); }
+        if (res.ok) setResult({ status: "success", message: "Email verified successfully!" });
+        else setResult({ status: "error", message: data.error || "Verification failed." });
       })
-      .catch(() => { setStatus("error"); setMessage("Network error."); });
+      .catch(() => setResult({ status: "error", message: "Network error." }));
   }, [token]);
 
   return (

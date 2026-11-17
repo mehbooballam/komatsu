@@ -140,7 +140,7 @@ export default function AlertsPage() {
   const [alsoImports, setAlsoImports] = useState(true);
 
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<Filters>(() => ({
@@ -180,8 +180,8 @@ export default function AlertsPage() {
   }, []);
   useEffect(() => { loadFacets(); }, [loadFacets, refreshKey]);
 
-  const fetchAlerts = useCallback(async () => {
-    setLoading(true);
+  // Query string for the current page/sort/filters; refetches whenever it changes
+  const alertsQuery = useMemo(() => {
     const params = new URLSearchParams();
     params.set("page", String(page));
     params.set("per_page", String(PAGE_SIZE));
@@ -195,19 +195,30 @@ export default function AlertsPage() {
     if (filters.group) params.set("group_id", filters.group);
     if (filters.deadline) params.set("deadline_within", filters.deadline);
     if (filters.needsReview) params.set("needs_review", "true");
-    try {
-      const res = await fetch(`/api/alerts?${params}`);
-      if (res.ok) {
-        const data = await res.json();
-        setAlerts(data.alerts || []);
-        setTotal(data.pagination?.total ?? 0);
-      }
-    } finally {
-      setLoading(false);
-    }
+    return params.toString();
   }, [page, sortBy, sortDir, filters]);
 
-  useEffect(() => { fetchAlerts(); }, [fetchAlerts, refreshKey]);
+  // "Loading" = the results shown are not yet for the current query (no setState needed to start a fetch)
+  const requestKey = `${alertsQuery}#${refreshKey}`;
+  const loading = loadedKey !== requestKey;
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/alerts?${alertsQuery}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null)
+      .then((data) => {
+        if (cancelled) return;
+        if (data) {
+          setAlerts(data.alerts || []);
+          setTotal(data.pagination?.total ?? 0);
+        }
+        setLoadedKey(`${alertsQuery}#${refreshKey}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [alertsQuery, refreshKey]);
 
   const refresh = () => setRefreshKey((k) => k + 1);
 
@@ -517,10 +528,7 @@ export default function AlertsPage() {
         <AlertDrawer
           alertId={selectedAlert}
           onClose={() => setSelectedAlert(null)}
-          onChanged={() => {
-            fetchAlerts();
-            loadFacets();
-          }}
+          onChanged={refresh}
         />
       )}
     </div>

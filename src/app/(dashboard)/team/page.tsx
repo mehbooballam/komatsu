@@ -60,7 +60,22 @@ export default function TeamPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetch("/api/teams/members"), fetch("/api/invitations"), fetch("/api/teams")])
+      .then((responses) => Promise.all(responses.map((r) => r.json().catch(() => ({})))))
+      .catch(() => [{}, {}, {}])
+      .then(([mData, iData, tData]) => {
+        if (cancelled) return;
+        setMembers(mData.members || []);
+        setInvitations(iData.invitations || []);
+        setTeams(tData.teams || []);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();

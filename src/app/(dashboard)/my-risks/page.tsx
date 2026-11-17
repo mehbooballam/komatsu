@@ -26,22 +26,27 @@ export default function MyRisksPage() {
   const [loading, setLoading] = useState(true);
   const [selectedAlert, setSelectedAlert] = useState<string | null>(null);
 
-  const fetchMyAlerts = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/alerts?assigned_to_me=true&limit=100&sort=priority&dir=desc");
-      if (res.ok) {
-        const data = await res.json();
-        setAlerts(data.alerts || []);
-      }
-    } catch (e) {
-      console.error("Failed to fetch assigned alerts", e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Bumped after changes in the drawer to reload the list
+  const [reloadKey, setReloadKey] = useState(0);
+  const fetchMyAlerts = useCallback(() => setReloadKey((k) => k + 1), []);
 
-  useEffect(() => { fetchMyAlerts(); }, [fetchMyAlerts]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/alerts?assigned_to_me=true&limit=100&sort=priority&dir=desc")
+      .then((res) => (res.ok ? res.json() : null))
+      .catch((e) => {
+        console.error("Failed to fetch assigned alerts", e);
+        return null;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        if (data) setAlerts(data.alerts || []);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
 
   const grouped = {
     critical: alerts.filter((a) => a.effective_priority === "critical"),
@@ -133,7 +138,7 @@ export default function MyRisksPage() {
       <Sheet open={!!selectedAlert} onOpenChange={() => setSelectedAlert(null)}>
         <SheetContent side="right" className="w-full sm:max-w-2xl p-0 overflow-y-auto">
           {selectedAlert && (
-            <AlertDrawer alertId={selectedAlert} onClose={() => setSelectedAlert(null)} />
+            <AlertDrawer alertId={selectedAlert} onClose={() => setSelectedAlert(null)} onChanged={fetchMyAlerts} />
           )}
         </SheetContent>
       </Sheet>

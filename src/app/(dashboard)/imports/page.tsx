@@ -128,7 +128,20 @@ export default function ImportsPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadBatches(); }, [loadBatches]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/imports")
+      .then((res) => (res.ok ? res.json() : { batches: [] }))
+      .catch(() => ({ batches: [] }))
+      .then((data) => {
+        if (cancelled) return;
+        setBatches(data.batches || []);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleUpload(file: File) {
     if (!file) return;
@@ -220,10 +233,11 @@ export default function ImportsPage() {
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Upload and manage Daptic alert files</p>
         </div>
         <div className="flex gap-2">
-          <a href="/api/imports/template?format=xlsx" className="px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700">
+          {/* Plain download links: these fetch files from API routes */}
+          <a href="/api/imports/template?format=xlsx" download className="px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700">
             Download Excel template
           </a>
-          <a href="/api/imports/template?format=csv" className="px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700">
+          <a href="/api/imports/template?format=csv" download className="px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700">
             Download CSV template
           </a>
         </div>

@@ -145,8 +145,24 @@ function ScoringPolicyEditor() {
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+    fetch("/api/scoring/policy")
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          setError("Could not load the scoring policy");
+          return;
+        }
+        const d: PolicyResponse = await res.json();
+        if (cancelled) return;
+        setData(d);
+        setDraft(clone(d.policy));
+      })
+      .catch(() => !cancelled && setError("Could not load the scoring policy"));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const readOnly = !data?.can_edit;
   const dirty = useMemo(() => !!data && !!draft && JSON.stringify(data.policy) !== JSON.stringify(draft), [data, draft]);

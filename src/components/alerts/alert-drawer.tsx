@@ -12,6 +12,8 @@ import { useSessionInfo } from "@/components/layout/session-context";
 import { StageBadge, GroupPicker, createGroup, type Group } from "@/components/alerts/alerts-table";
 import { DeadlineDialog } from "@/components/alerts/deadline-dialog";
 import { AlertNotes } from "@/components/alerts/alert-notes";
+import { describeEvent, type Refs } from "@/lib/audit-describe";
+import { Sentence, ChangeList, lowerFirst } from "@/components/audit/audit-entry";
 import { ProductPicker, ProductChip, setAlertProduct, type AttachedProduct, type ProductRef } from "@/components/products/product-picker";
 import { UserAvatar } from "@/components/ui/brand";
 
@@ -85,7 +87,17 @@ interface AlertDetail {
 }
 
 interface Member { id: string; display_name: string; email: string; role: string; avatar?: string | null }
-interface AuditEvent { id: string; action: string; occurred_at: string; actor_name: string | null; reason: string | null; after_values: Record<string, unknown> | null }
+interface AuditEvent {
+  id: string;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  occurred_at: string;
+  actor_name: string | null;
+  reason: string | null;
+  before_values: Record<string, unknown> | null;
+  after_values: Record<string, unknown> | null;
+}
 
 const BAND_STYLE: Record<string, { chip: string; bar: string; label: string }> = {
   critical: { chip: "bg-violet-100 text-violet-700 ring-violet-200 dark:bg-violet-500/15 dark:text-violet-300 dark:ring-violet-500/30", bar: "from-violet-500 to-purple-600", label: "Critical" },
@@ -100,21 +112,6 @@ const FACTORS = [
   { key: "cost_to_implement", label: "Cost to implement", letter: "B" },
   { key: "urgency", label: "Urgency", letter: "C" },
 ] as const;
-
-const ACTION_LABELS: Record<string, string> = {
-  score_override: "Score adjusted",
-  score_override_cleared: "Score override cleared",
-  assign_owner: "Owner changed",
-  deadline_verified: "Deadline updated",
-  deadline_added: "Deadline added",
-  deadline_updated: "Deadline updated",
-  link_alert: "Added to group",
-  attach_product: "Product attached",
-  detach_product: "Product removed",
-  unlink_alert: "Removed from group",
-  import_completed: "Imported",
-  alert_updated: "Updated from import",
-};
 
 function formatDate(d: string | null | undefined) {
   if (!d) return "—";
@@ -171,6 +168,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
   const [members, setMembers] = useState<Member[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [history, setHistory] = useState<AuditEvent[] | null>(null);
+  const [historyRefs, setHistoryRefs] = useState<Refs>({});
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
   const [scoreOpen, setScoreOpen] = useState(false);
@@ -214,7 +212,10 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
     if (activeTab !== "history" || !alertId || history) return;
     fetch(`/api/audit?entity_id=${alertId}&limit=50`)
       .then((r) => (r.ok ? r.json() : { events: [] }))
-      .then((d) => setHistory(d.events || []));
+      .then((d) => {
+        setHistoryRefs(d.refs || {});
+        setHistory(d.events || []);
+      });
   }, [activeTab, alertId, history]);
 
   useEffect(() => {
@@ -799,16 +800,21 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                   <p className="text-sm text-slate-500">No activity recorded yet.</p>
                 ) : (
                   <ol className="relative space-y-4 border-l border-slate-200 pl-5 dark:border-slate-700">
-                    {history.map((e) => (
-                      <li key={e.id} className="relative">
-                        <span className="absolute -left-[26px] top-1 h-3 w-3 rounded-full border-2 border-white bg-blue-500 dark:border-slate-900" />
-                        <p className="text-sm font-medium text-slate-900 dark:text-white">{ACTION_LABELS[e.action] || e.action.replace(/_/g, " ")}</p>
-                        <p className="text-xs text-slate-500">
-                          {e.actor_name || "System"} · {new Date(e.occurred_at).toLocaleString()}
-                        </p>
-                        {e.reason && <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">“{e.reason}”</p>}
-                      </li>
-                    ))}
+                    {history.map((e) => {
+                      const d = describeEvent(e, historyRefs);
+                      return (
+                        <li key={e.id} className="relative">
+                          <span className="absolute -left-[26px] top-1 h-3 w-3 rounded-full border-2 border-white bg-blue-500 dark:border-slate-900" />
+                          <p className="text-sm text-slate-700 dark:text-slate-300">
+                            <span className="font-semibold text-slate-900 dark:text-white">{e.actor_name || "System"}</span>{" "}
+                            <Sentence parts={lowerFirst(d.summary)} />
+                          </p>
+                          <p className="text-xs text-slate-500">{new Date(e.occurred_at).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+                          {d.note && <p className="mt-0.5 text-xs italic text-slate-600 dark:text-slate-400">“{d.note}”</p>}
+                          <ChangeList changes={d.changes} />
+                        </li>
+                      );
+                    })}
                   </ol>
                 )}
               </Section>
