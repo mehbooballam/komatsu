@@ -1,26 +1,19 @@
 import { addMonths, differenceInCalendarDays, endOfMonth, isAfter, isBefore, isEqual, startOfDay } from "date-fns";
 
-export type Band = "low" | "moderate" | "high" | "critical";
-export type FactorKey = "market_access" | "cost_to_implement" | "human_resources" | "urgency";
+import {
+  bandForTotal,
+  factorEscalations,
+  normalizePolicy,
+  escalationText,
+  MAX_TOTAL,
+  type Band,
+  type FactorKey,
+  type ScoringPolicy,
+} from "./policy";
+
+export type { Band, FactorKey, ScoringPolicy };
 export const VALID_RATINGS = [1, 3, 6, 9] as const;
 export type Rating = (typeof VALID_RATINGS)[number];
-
-export interface ScoringPolicy {
-  factors: Record<FactorKey, {
-    allowed_values: number[];
-    boundaries: Record<string, string>;
-    boundary_values?: Record<string, number>;
-  }>;
-  bands: Record<Band, [number, number]>;
-  escalations: Array<{
-    condition: string;
-    minimum_band?: string;
-    band?: string;
-    description: string;
-  }>;
-  total_override_enabled: boolean;
-  version: number;
-}
 
 export interface FactorValues {
   market_access: number | null;
@@ -89,12 +82,9 @@ function maxBand(a: Band | null, b: Band | null): Band {
   return bandRank(a) >= bandRank(b) ? a : b;
 }
 
-/** Map a raw numeric total to its base band. */
-export function calculateBand(total: number): Band {
-  if (total <= 80) return "low";
-  if (total <= 323) return "moderate";
-  if (total <= 1295) return "high";
-  return "critical";
+/** Map a raw numeric total to its base band, using the policy's band thresholds. */
+export function calculateBand(total: number, policy?: ScoringPolicy): Band {
+  return bandForTotal(total, normalizePolicy(policy));
 }
 
 /**
@@ -183,33 +173,26 @@ export function calculateEscalation(
   baseBand: Band | null,
   deadline?: DeadlineInfo | null,
   forecast?: ForecastInfo | null,
-  asOfDate?: Date
+  asOfDate?: Date,
+  rawPolicy?: ScoringPolicy
 ): EscalationResult {
+  const policy = normalizePolicy(rawPolicy);
   const reasons: EscalationResult["reasons"] = [];
   let effectiveBand: Band | null = baseBand;
 
-  // Rule 1: Market access = 9 → minimum High
-  if (factors.market_access === 9) {
-    reasons.push({
-      condition: "market_access_9",
-      description: "Market access = 9 gives a minimum priority of High",
-      resulting_band: "high",
-    });
-    effectiveBand = maxBand(effectiveBand, "high");
+  // Rules 1 & 2: factor-based escalations (thresholds, bands and on/off come from the policy)
+  for (const r of factorEscalations(factors, policy)) {
+    reasons.push(r);
+    effectiveBand = maxBand(effectiveBand, r.resulting_band);
   }
 
-  // Rule 2: Urgency = 9 AND Market access >= 6 → Critical
-  if (factors.urgency === 9 && factors.market_access !== null && factors.market_access >= 6) {
-    reasons.push({
-      condition: "urgency_9_and_market_access_gte_6",
-      description: "Urgency = 9 and Market access ≥ 6 gives Critical",
-      resulting_band: "critical",
-    });
-    effectiveBand = maxBand(effectiveBand, "critical");
-  }
+  const deadlineRule = policy.escalations.find((e) => e.condition === "forecast_missed_deadline");
+  const deadlineRuleOn = !!deadlineRule?.enabled;
+  const deadlineBand: Band = deadlineRule?.band ?? "critical";
+  const deadlineText = deadlineRule ? escalationText(deadlineRule) : "";
 
-  // Rule 3: Forecast missed compliance deadline → Critical
-  if (deadline && forecast && asOfDate) {
+  // Rule 3: Forecast missed compliance deadline
+  if (deadlineRuleOn && deadline && forecast && asOfDate) {
     const deadlineMs = startOfDay(deadline.date_value).getTime();
     let missed = false;
 
@@ -229,15 +212,15 @@ export function calculateEscalation(
     if (missed) {
       reasons.push({
         condition: "forecast_missed_deadline",
-        description: "Forecast missed compliance deadline gives Critical",
-        resulting_band: "critical",
+        description: `Forecast misses the compliance deadline (${deadlineText})`,
+        resulting_band: deadlineBand,
       });
-      effectiveBand = maxBand(effectiveBand, "critical");
+      effectiveBand = maxBand(effectiveBand, deadlineBand);
     }
   }
 
   // Rule 3 also: confirmed overdue outstanding obligation
-  if (deadline && asOfDate) {
+  if (deadlineRuleOn && deadline && asOfDate) {
     const daysRemaining = computeDaysRemaining(deadline.date_value, asOfDate);
     if (
       daysRemaining < 0 &&
@@ -249,10 +232,10 @@ export function calculateEscalation(
       if (!alreadyHasForecastMiss) {
         reasons.push({
           condition: "forecast_missed_deadline",
-          description: "Confirmed overdue outstanding compliance obligation gives Critical",
-          resulting_band: "critical",
+          description: `Confirmed compliance deadline is overdue (${deadlineText})`,
+          resulting_band: deadlineBand,
         });
-        effectiveBand = maxBand(effectiveBand, "critical");
+        effectiveBand = maxBand(effectiveBand, deadlineBand);
       }
     }
   }
@@ -306,21 +289,31 @@ export function resolveEffectiveFactors(
 
   const sourceA = sourceRatings.market_access;
   const sourceB = sourceRatings.cost_to_implement;
-  const sourceC = sourceRatings.human_resources;
 
   const overrideA = activeOverride("market_access");
   const overrideB = activeOverride("cost_to_implement");
-  const overrideC = activeOverride("human_resources");
   const overrideD = activeOverride("urgency");
 
   const effectiveA = overrideA ? overrideA.value : sourceA;
   const effectiveB = overrideB ? overrideB.value : sourceB;
-  const effectiveC = overrideC ? overrideC.value : sourceC;
+  // "Additional people" is no longer part of the score (kept only in import history).
+  const effectiveC = null;
 
   let urgencyResult: UrgencyResult;
 
   if (deadline && deadline.kind === "compliance" && deadline.verification_state === "verified" && deadline.lifecycle_state === "outstanding") {
     urgencyResult = computeUrgencyFromDeadline(deadline.date_value, asOfDate, policy);
+  } else if (sourceRatings.urgency !== null && sourceRatings.urgency !== undefined) {
+    // No confirmed deadline yet: use the urgency rating supplied in the import file.
+    urgencyResult = {
+      rating: sourceRatings.urgency,
+      days_remaining: deadline && deadline.lifecycle_state === "outstanding" ? computeDaysRemaining(deadline.date_value, asOfDate) : null,
+      low_confidence: true,
+      label: "Urgency from imported rating (deadline not yet confirmed)",
+    };
+  } else if (deadline && deadline.lifecycle_state === "outstanding") {
+    // Unconfirmed deadline date from the import: derive urgency, flagged as low confidence.
+    urgencyResult = { ...computeUrgencyFromDeadline(deadline.date_value, asOfDate, policy), low_confidence: true };
   } else {
     urgencyResult = {
       rating: 1,
@@ -337,7 +330,7 @@ export function resolveEffectiveFactors(
     factors: {
       market_access: sourceA,
       cost_to_implement: sourceB,
-      human_resources: sourceC,
+      human_resources: null,
       urgency: liveD,
     },
     urgencyResult,
@@ -365,7 +358,8 @@ export function calculateFullAssessment(params: {
   policyVersion: number;
   policy?: ScoringPolicy;
 }): AssessmentResult {
-  const { sourceRatings, overrides, deadline, forecast, asOfDate, policyVersion, policy } = params;
+  const { sourceRatings, overrides, deadline, forecast, asOfDate, policyVersion } = params;
+  const policy = normalizePolicy(params.policy);
 
   const { factors, urgencyResult, effectiveFactors } = resolveEffectiveFactors(
     sourceRatings,
@@ -377,39 +371,50 @@ export function calculateFullAssessment(params: {
 
   const eA = effectiveFactors.market_access;
   const eB = effectiveFactors.cost_to_implement;
-  const eC = effectiveFactors.human_resources;
   const eD = effectiveFactors.urgency;
 
   const allSourceBlank =
     sourceRatings.market_access === null &&
-    sourceRatings.cost_to_implement === null &&
-    sourceRatings.human_resources === null;
+    sourceRatings.cost_to_implement === null;
 
   const hasOverridesForABC =
     overrides.some(
       (o) =>
-        ["market_access", "cost_to_implement", "human_resources"].includes(o.target) &&
+        ["market_access", "cost_to_implement"].includes(o.target) &&
         o.ended_at === null &&
         (o.expires_at === null || isAfter(o.expires_at, new Date()))
     );
 
-  const isUnscored = allSourceBlank && !hasOverridesForABC;
+  // Direct override of the total score (only when the policy allows it)
+  const totalOverride = policy.total_override_enabled
+    ? overrides.find(
+        (o) => o.target === "total" && o.ended_at === null && (o.expires_at === null || isAfter(o.expires_at, new Date()))
+      ) ?? null
+    : null;
 
-  const allFactorsPresent = eA !== null && eB !== null && eC !== null && eD !== null;
+  const isUnscored = allSourceBlank && !hasOverridesForABC && !totalOverride;
+
+  const allFactorsPresent = eA !== null && eB !== null && eD !== null;
 
   let rawTotal: number | null = null;
   let rawBand: Band | null = null;
   let effectiveTotal: number | null = null;
   let baseBand: Band | null = null;
 
-  if (allFactorsPresent && !isUnscored) {
-    rawTotal = eA! * eB! * eC! * eD!;
-    rawBand = calculateBand(rawTotal);
+  if (allFactorsPresent && !(allSourceBlank && !hasOverridesForABC)) {
+    // Total = Market access × Cost to implement × Urgency (1–729)
+    rawTotal = eA! * eB! * eD!;
+    rawBand = calculateBand(rawTotal, policy);
     effectiveTotal = rawTotal;
     baseBand = rawBand;
   }
 
-  const escalation = calculateEscalation(effectiveFactors, baseBand, deadline, forecast, asOfDate);
+  if (totalOverride) {
+    effectiveTotal = Math.min(MAX_TOTAL, Math.max(1, Math.round(totalOverride.value)));
+    baseBand = calculateBand(effectiveTotal, policy);
+  }
+
+  const escalation = calculateEscalation(effectiveFactors, baseBand, deadline, forecast, asOfDate, policy);
 
   let effectiveBand: Band | null = escalation.effective_band;
 
@@ -437,13 +442,16 @@ export function calculateFullAssessment(params: {
   }
 
   const signatureInputs = {
-    eA, eB, eC, eD,
+    eA, eB, eD,
+    formula: "A*B*D",
     deadline: deadline?.date_value?.toISOString() ?? null,
     deadlineKind: deadline?.kind ?? null,
     deadlineVerification: deadline?.verification_state ?? null,
     forecastRemainingDays: forecast?.remaining_days ?? null,
     forecastFinish: forecast?.estimated_finish_date?.toISOString() ?? null,
     policyVersion,
+    policyHash: hashObject(policy as unknown as Record<string, unknown>),
+    totalOverride: totalOverride?.value ?? null,
     asOfDate: asOfDate.toISOString().split("T")[0],
   };
   const input_signature = hashObject(signatureInputs);

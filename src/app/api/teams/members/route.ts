@@ -8,7 +8,7 @@ export async function GET() {
 
   const result = await query(
     `SELECT m.id, m.role, m.access_scope, m.state, m.joined_at,
-            up.display_name, up.email
+            up.display_name, up.email, up.preferences->>'avatar' AS avatar
      FROM memberships m
      JOIN user_profiles up ON up.id = m.user_id
      WHERE m.company_id = $1 AND m.state = 'active'

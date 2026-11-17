@@ -48,20 +48,14 @@ export async function getServerSession(): Promise<ServerSession | null> {
   if (userResult.rows.length === 0) return null;
   const user = userResult.rows[0] as AuthUser;
 
-  let membershipQuery: string;
-  let membershipParams: string[];
-
-  if (companyId) {
-    membershipQuery = `SELECT id, company_id, user_id, role, access_scope, state
-      FROM memberships WHERE user_id = $1 AND company_id = $2 AND state = 'active'`;
-    membershipParams = [session.userId, companyId];
-  } else {
-    membershipQuery = `SELECT id, company_id, user_id, role, access_scope, state
-      FROM memberships WHERE user_id = $1 AND state = 'active' ORDER BY joined_at ASC LIMIT 1`;
-    membershipParams = [session.userId];
-  }
-
-  const membershipResult = await query(membershipQuery, membershipParams);
+  // Prefer the selected workspace (komatsu_company cookie); fall back to the
+  // user's first workspace if the cookie is missing or no longer valid.
+  const membershipResult = await query(
+    `SELECT id, company_id, user_id, role, access_scope, state
+     FROM memberships WHERE user_id = $1 AND state = 'active'
+     ORDER BY (company_id::text = $2) DESC, joined_at ASC LIMIT 1`,
+    [session.userId, companyId ?? ""]
+  );
   if (membershipResult.rows.length === 0) return null;
   const membership = membershipResult.rows[0] as AuthMembership;
 

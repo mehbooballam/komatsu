@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
   await writeFile(filePath, buffer);
 
   const feedResult = await query(
-    `SELECT id FROM feeds WHERE company_id = $1 AND dataset_key = 'daptic_default' LIMIT 1`,
+    `SELECT id FROM feeds WHERE company_id = $1 AND dataset_key = 'daptic-default' LIMIT 1`,
     [session.membership.company_id]
   );
 
@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
   if (feedResult.rows.length === 0) {
     const newFeed = await query(
       `INSERT INTO feeds (company_id, provider_name, dataset_key, name)
-       VALUES ($1, 'Daptic', 'daptic_default', 'Daptic Default')
+       VALUES ($1, 'Daptic', 'daptic-default', 'Daptic Alert Feed')
        RETURNING id`,
       [session.membership.company_id]
     );

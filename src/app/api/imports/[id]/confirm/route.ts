@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getSessionFromRequest, requireRole } from "@/lib/auth/api-helper";
 import { processImportBatch } from "@/lib/import/processor";
-import type { ValidatedRow } from "@/lib/import/validator";
+import { validateRows, type ValidatedRow } from "@/lib/import/validator";
+import type { ParsedRow } from "@/lib/import/parser-xlsx";
 import type { ImportColumnName } from "@/lib/import/constants";
 
 export async function POST(
@@ -44,35 +45,28 @@ export async function POST(
     [id]
   );
 
-  const validatedRows: ValidatedRow[] = rowsResult.rows.map((r) => {
-    const raw = r.raw_payload || {};
+  // raw_payload is keyed by the file's original headers. Map them back to import
+  // columns with the batch's saved header mapping, then re-run the same validator
+  // used for the preview so values are parsed (ratings → numbers, products →
+  // arrays, dates → ISO) exactly as the user saw them.
+  const columnMapping: Record<string, ImportColumnName | null> = batch.column_mapping || {};
+  const parsedRows: ParsedRow[] = rowsResult.rows.map((r) => {
+    const raw: Record<string, string | null> = r.raw_payload || {};
     const mapped: Partial<Record<ImportColumnName, string | null>> = {};
     const presentColumns = new Set<ImportColumnName>();
 
-    for (const [key, value] of Object.entries(raw)) {
-      const col = key as ImportColumnName;
+    for (const [header, value] of Object.entries(raw)) {
+      const col = columnMapping[header] ?? null;
+      if (!col) continue;
       presentColumns.add(col);
-      mapped[col] = value as string | null;
+      const trimmed = typeof value === "string" ? value.trim() : value;
+      mapped[col] = trimmed === "" || trimmed === undefined ? null : (trimmed as string | null);
     }
 
-    const validation = r.validation || { errors: [], warnings: [] };
-    const parsed: Partial<Record<ImportColumnName, unknown>> = { ...mapped };
-
-    if (mapped.alert_id) parsed.alert_id = mapped.alert_id;
-    if (mapped.title) parsed.title = mapped.title;
-
-    return {
-      rowNumber: r.row_number,
-      raw,
-      mapped,
-      presentColumns,
-      parsed,
-      errors: validation.errors || [],
-      warnings: validation.warnings || [],
-      isValid: r.state === "valid",
-      isDuplicate: false,
-    };
+    return { rowNumber: r.row_number, raw, mapped, presentColumns };
   });
+
+  const validatedRows: ValidatedRow[] = validateRows(parsedRows).rows;
 
   try {
     const result = await processImportBatch(

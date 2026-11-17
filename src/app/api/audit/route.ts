@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
   const action = searchParams.get("action");
   const entityType = searchParams.get("entity_type");
   const actorId = searchParams.get("actor_id");
+  const entityId = searchParams.get("entity_id");
   const from = searchParams.get("from");
   const to = searchParams.get("to");
 
@@ -23,6 +24,12 @@ export async function GET(request: NextRequest) {
   if (action) { conditions.push(`ae.action = $${idx++}`); params.push(action); }
   if (entityType) { conditions.push(`ae.entity_type = $${idx++}`); params.push(entityType); }
   if (actorId) { conditions.push(`ae.actor_membership_id = $${idx++}`); params.push(actorId); }
+  if (entityId) {
+    // Include events about the entity itself and events that reference it (e.g. group link/unlink of an alert).
+    conditions.push(`(ae.entity_id::text = $${idx} OR ae.after_values->>'alert_id' = $${idx} OR ae.before_values->>'alert_id' = $${idx})`);
+    idx++;
+    params.push(entityId);
+  }
   if (from) { conditions.push(`ae.occurred_at >= $${idx++}`); params.push(from); }
   if (to) { conditions.push(`ae.occurred_at <= $${idx++}`); params.push(to); }
 

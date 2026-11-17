@@ -25,8 +25,8 @@ export async function getSessionFromRequest(request: Request): Promise<RequestSe
      LEFT JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
      LEFT JOIN companies c ON c.id = m.company_id
      WHERE s.token = $1 AND s.expires_at > NOW()
-     ORDER BY m.joined_at DESC LIMIT 1`,
-    [hashToken(match[1])]
+     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
+    [hashToken(match[1]), cookieHeader.match(/komatsu_company=([^;]+)/)?.[1] ?? ""]
   );
 
   if (res.rows.length === 0 || !res.rows[0].mid) return null;

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { cookies } from "next/headers";
 import crypto from "crypto";
+import { loadGroupTree } from "@/lib/groups";
+import { alertProducts } from "@/lib/products";
 
 async function getAuth() {
   const cookieStore = await cookies();
@@ -14,8 +16,8 @@ async function getAuth() {
      JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
      JOIN companies c ON c.id = m.company_id
      WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY s.last_active_at DESC LIMIT 1`,
-    [tokenHash]
+     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
+    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
   );
   return res.rows[0] || null;
 }
@@ -173,6 +175,9 @@ export async function GET(
       record_version: alert.record_version,
       group_id: alert.primary_group_id,
       group_title: alert.group_title,
+      group_path: alert.primary_group_id
+        ? (await loadGroupTree(companyId)).find((g) => g.id === alert.primary_group_id)?.path ?? [alert.group_title]
+        : null,
       ownership: {
         type: ownershipType,
         effective_owner_id: effectiveOwnerMembershipId,
@@ -188,7 +193,16 @@ export async function GET(
     source_revisions: sourceRevisions.rows,
     source_factors: sourceFactors,
     active_overrides: overridesRes.rows,
-    products: products.rows,
+    // Raw links (incl. rejected import suggestions) and the products that actually apply
+    product_links: products.rows,
+    products: (await alertProducts(companyId, [id])).get(id) || [],
+    notes_count: (
+      await query(
+        `SELECT COUNT(*)::int AS n FROM alert_notes
+         WHERE alert_id = $1 AND company_id = $2 AND (visibility = 'team' OR author_membership_id = $3)`,
+        [id, companyId, auth.membership_id]
+      )
+    ).rows[0].n,
     geographies: geographies.rows,
     topics: topics.rows,
     tags: tags.rows,

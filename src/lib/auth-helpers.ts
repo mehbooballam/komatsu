@@ -27,8 +27,8 @@ export async function getAuth(): Promise<AuthContext | null> {
      JOIN companies c ON c.id = m.company_id
      JOIN user_profiles up ON up.id = s.user_id
      WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY s.last_active_at DESC LIMIT 1`,
-    [tokenHash]
+     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
+    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
   );
   if (res.rows.length === 0) return null;
   await query(`UPDATE sessions SET last_active_at = now() WHERE token = $1`, [tokenHash]);

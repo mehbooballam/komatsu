@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import Link from "next/link";
 
 interface ImportBatch {
   id: string;
@@ -21,6 +22,95 @@ interface PreviewData {
   errors: Array<{ row: number; field: string; message: string }>;
 }
 
+interface PreviewApiRow {
+  rowNumber: number;
+  state: string;
+  alertStatus: "new" | "existing";
+  errors: Array<{ field: string; message: string }>;
+  raw: Record<string, unknown> | null;
+}
+
+interface PreviewApiResponse {
+  batch: { id: string };
+  counts: { total?: number; invalid?: number };
+  rows: PreviewApiRow[];
+}
+
+// Adapts GET /api/imports/[id]/preview to the shape the preview modal renders.
+function toPreviewData(data: PreviewApiResponse): PreviewData {
+  const rows = data.rows || [];
+  const valid = rows.filter((r) => r.state === "valid");
+  return {
+    batch_id: data.batch.id,
+    columns: rows[0]?.raw ? Object.keys(rows[0].raw) : [],
+    sample_rows: rows.map((r) => r.raw || {}),
+    counts: {
+      total: data.counts?.total ?? rows.length,
+      new: valid.filter((r) => r.alertStatus === "new").length,
+      changed: valid.filter((r) => r.alertStatus === "existing").length,
+      unchanged: 0,
+      invalid: rows.filter((r) => r.state === "invalid").length,
+    },
+    errors: rows.flatMap((r) => (r.errors || []).map((e) => ({ row: r.rowNumber, field: e.field, message: e.message }))),
+  };
+}
+
+interface Notice {
+  kind: "success" | "warning" | "error";
+  title: string;
+  detail?: string;
+  stats?: Array<{ label: string; value: number }>;
+  errors?: string[];
+  showAlertsLink?: boolean;
+}
+
+const NOTICE_STYLES: Record<Notice["kind"], string> = {
+  success: "border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-900/20 dark:text-green-300",
+  warning: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-300",
+  error: "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-900/20 dark:text-red-300",
+};
+
+function NoticeBanner({ notice, onClose }: { notice: Notice; onClose: () => void }) {
+  return (
+    <div role={notice.kind === "error" ? "alert" : "status"} className={`mb-6 rounded-xl border p-4 ${NOTICE_STYLES[notice.kind]}`}>
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold">{notice.title}</p>
+          {notice.detail && <p className="mt-1 text-sm opacity-90 break-words">{notice.detail}</p>}
+          {notice.stats && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {notice.stats.map((s) => (
+                <span key={s.label} className="inline-flex items-baseline gap-1.5 rounded-lg bg-white/70 dark:bg-slate-900/40 px-3 py-1.5 text-xs">
+                  <span className="text-base font-semibold tabular-nums">{s.value}</span>
+                  <span className="opacity-80">{s.label}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          {notice.errors && notice.errors.length > 0 && (
+            <ul className="mt-3 space-y-0.5 text-xs opacity-90">
+              {notice.errors.slice(0, 5).map((e, i) => (
+                <li key={i}>{e}</li>
+              ))}
+              {notice.errors.length > 5 && <li>… and {notice.errors.length - 5} more</li>}
+            </ul>
+          )}
+          {notice.showAlertsLink && (
+            <Link href="/alerts" className="mt-3 inline-block text-sm font-medium underline underline-offset-2 hover:opacity-80">
+              View alerts →
+            </Link>
+          )}
+        </div>
+        <button type="button" onClick={onClose} aria-label="Dismiss" className="rounded p-1 opacity-60 hover:opacity-100">
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function ImportsPage() {
   const [batches, setBatches] = useState<ImportBatch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,6 +118,7 @@ export default function ImportsPage() {
   const [preview, setPreview] = useState<PreviewData | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadBatches = useCallback(async () => {
@@ -43,23 +134,33 @@ export default function ImportsPage() {
     if (!file) return;
     const ext = file.name.toLowerCase().split(".").pop();
     if (ext !== "xlsx" && ext !== "csv") {
-      alert("Please upload an .xlsx or .csv file");
+      setNotice({ kind: "error", title: "Unsupported file", detail: "Please upload an .xlsx or .csv file." });
       return;
     }
+    setNotice(null);
     setUploading(true);
     const formData = new FormData();
     formData.append("file", file);
     try {
       const res = await fetch("/api/imports/upload", { method: "POST", body: formData });
       const data = await res.json();
-      if (!res.ok) { alert(data.error || "Upload failed"); return; }
-      const previewRes = await fetch(`/api/imports/${data.batch_id}/preview`);
-      const previewData = await previewRes.json();
-      setPreview(previewData);
+      if (!res.ok) {
+        setNotice({ kind: "error", title: data.error || "Upload failed", detail: data.details });
+        return;
+      }
+      const previewRes = await fetch(`/api/imports/${data.batchId}/preview`);
+      const previewJson = await previewRes.json();
+      if (!previewRes.ok) {
+        setNotice({ kind: "error", title: previewJson.error || "Could not load preview" });
+        return;
+      }
+      setPreview(toPreviewData(previewJson));
+      loadBatches();
     } catch {
-      alert("Upload failed");
+      setNotice({ kind: "error", title: "Upload failed", detail: "Check your connection and try again." });
     } finally {
       setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
@@ -67,13 +168,33 @@ export default function ImportsPage() {
     if (!preview) return;
     setConfirming(true);
     try {
-      await fetch(`/api/imports/${preview.batch_id}/confirm`, { method: "POST" });
+      const res = await fetch(`/api/imports/${preview.batch_id}/confirm`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setNotice({ kind: "error", title: data.error || "Import failed", detail: data.details });
+        setPreview(null);
+        return;
+      }
+      const c = data.counts || {};
+      const rowErrors: Array<{ rowNumber: number; message: string }> = c.errors || [];
+      setNotice({
+        kind: rowErrors.length ? "warning" : "success",
+        title: "Import complete",
+        stats: [
+          { label: "Created", value: c.created ?? 0 },
+          { label: "Updated", value: c.updated ?? 0 },
+          { label: "Unchanged", value: c.unchanged ?? 0 },
+          { label: "Skipped", value: c.skipped ?? 0 },
+        ],
+        errors: rowErrors.map((e) => (e.rowNumber ? `Row ${e.rowNumber}: ${e.message}` : e.message)),
+        showAlertsLink: (c.created ?? 0) + (c.updated ?? 0) > 0,
+      });
       setPreview(null);
-      loadBatches();
     } catch {
-      alert("Import failed");
+      setNotice({ kind: "error", title: "Import failed", detail: "Check your connection and try again." });
     } finally {
       setConfirming(false);
+      loadBatches();
     }
   }
 
@@ -107,6 +228,8 @@ export default function ImportsPage() {
           </a>
         </div>
       </div>
+
+      {notice && <NoticeBanner notice={notice} onClose={() => setNotice(null)} />}
 
       {/* Upload area */}
       <div
@@ -223,8 +346,9 @@ export default function ImportsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 hidden md:table-cell">
-                    {b.row_counts.total || "—"}
-                    {b.row_counts.created ? <span className="text-green-600 ml-1">(+{b.row_counts.created})</span> : null}
+                    {b.row_counts?.total ??
+                      ((b.row_counts?.created ?? 0) + (b.row_counts?.updated ?? 0) + (b.row_counts?.unchanged ?? 0) + (b.row_counts?.skipped ?? 0) || "—")}
+                    {b.row_counts?.created ?<span className="text-green-600 ml-1">(+{b.row_counts.created})</span> : null}
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400 hidden lg:table-cell">
                     {new Date(b.created_at).toLocaleDateString()}

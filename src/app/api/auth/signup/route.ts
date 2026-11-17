@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { hashPassword, validatePasswordStrength } from "@/lib/auth/password";
 import { createSession } from "@/lib/auth/session";
+import { DEFAULT_POLICY } from "@/lib/scoring/policy";
 
 function slugify(name: string): string {
   return name
@@ -11,73 +12,7 @@ function slugify(name: string): string {
     .slice(0, 60);
 }
 
-const DEFAULT_SCORING_POLICY = {
-  factors: {
-    market_access: {
-      allowed_values: [1, 3, 6, 9],
-      boundaries: {
-        "1": "USD 0 to under 100,000",
-        "3": "USD 100,000 to 1,000,000",
-        "6": "Over USD 1,000,000 through 5,000,000",
-        "9": "Over USD 5,000,000",
-      },
-    },
-    cost_to_implement: {
-      allowed_values: [1, 3, 6, 9],
-      boundaries: {
-        "1": "USD 0 to under 25,000",
-        "3": "USD 25,000 to 250,000",
-        "6": "Over USD 250,000 through 1,000,000",
-        "9": "Over USD 1,000,000",
-      },
-    },
-    human_resources: {
-      allowed_values: [1, 3, 6, 9],
-      boundaries: {
-        "1": "0 FTE",
-        "3": "More than 0 through 5 FTE",
-        "6": "More than 5 through 10 FTE",
-        "9": "More than 10 FTE",
-      },
-      boundary_values: { exactly_5: 3 },
-    },
-    urgency: {
-      allowed_values: [1, 3, 6, 9],
-      boundaries: {
-        "1": "More than 36 months",
-        "3": "More than 18 through 36 months",
-        "6": "More than 6 through 18 months",
-        "9": "6 months or less, due today, or overdue",
-      },
-      boundary_values: { exactly_6_months: 9 },
-    },
-  },
-  bands: {
-    low: [1, 80],
-    moderate: [81, 323],
-    high: [324, 1295],
-    critical: [1296, 6561],
-  },
-  escalations: [
-    {
-      condition: "market_access_9",
-      minimum_band: "high",
-      description: "Market access = 9 gives minimum High",
-    },
-    {
-      condition: "urgency_9_and_market_access_gte_6",
-      band: "critical",
-      description: "Urgency = 9 and Market access >= 6 gives Critical",
-    },
-    {
-      condition: "forecast_missed_deadline",
-      band: "critical",
-      description: "Forecast missed deadline gives Critical",
-    },
-  ],
-  total_override_enabled: false,
-  version: 1,
-};
+const DEFAULT_SCORING_POLICY = DEFAULT_POLICY;
 
 export async function POST(request: Request) {
   try {

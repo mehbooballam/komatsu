@@ -30,6 +30,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const body = await request.json();
   const { alert_id, relationship = "primary" } = body;
 
+  const groupCheck = await query(
+    `SELECT 1 FROM regulation_groups WHERE id::text = $1 AND company_id = $2 AND state <> 'archived'`,
+    [id, auth.company_id]
+  );
+  if (groupCheck.rows.length === 0) return NextResponse.json({ error: "Group not found" }, { status: 404 });
+
   if (relationship === "primary") {
     await query(`UPDATE alerts SET primary_group_id = $1 WHERE id = $2 AND company_id = $3`, [id, alert_id, auth.company_id]);
   } else {

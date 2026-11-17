@@ -1,4 +1,4 @@
-import { query, getClient } from "@/lib/db";
+import { query, getClient, parseDateOnly } from "@/lib/db";
 import {
   calculateFullAssessment,
   type SourceRatings,
@@ -94,12 +94,18 @@ export async function recalculateAlert(
     ended_at: r.ended_at ? new Date(r.ended_at) : null,
   }));
 
+  // Prefer a verified compliance deadline; otherwise fall back to the earliest
+  // outstanding, not-rejected deadline (e.g. the date supplied in the import file)
+  // so the deadline is still shown and can inform urgency.
   const deadlineRes = await query(
     `SELECT id, date_value, kind, verification_state, lifecycle_state, applies_to
      FROM alert_deadlines
      WHERE alert_id = $1 AND company_id = $2
-       AND kind = 'compliance' AND verification_state = 'verified' AND lifecycle_state = 'outstanding'
-     ORDER BY date_value ASC LIMIT 1`,
+       AND lifecycle_state = 'outstanding'
+       AND verification_state NOT IN ('rejected', 'superseded')
+       AND kind <> 'comment'
+     ORDER BY (kind = 'compliance' AND verification_state = 'verified') DESC, date_value ASC
+     LIMIT 1`,
     [alertId, companyId]
   );
   let deadline: DeadlineInfo | null = null;
@@ -107,7 +113,7 @@ export async function recalculateAlert(
   if (deadlineRes.rows.length > 0) {
     const dl = deadlineRes.rows[0];
     deadline = {
-      date_value: new Date(dl.date_value),
+      date_value: parseDateOnly(dl.date_value),
       kind: dl.kind,
       verification_state: dl.verification_state,
       lifecycle_state: dl.lifecycle_state,
@@ -128,8 +134,8 @@ export async function recalculateAlert(
     const fc = forecastRes.rows[0];
     forecast = {
       remaining_days: fc.remaining_days,
-      estimated_finish_date: fc.estimated_finish_date ? new Date(fc.estimated_finish_date) : null,
-      as_of_date: new Date(fc.as_of_date),
+      estimated_finish_date: fc.estimated_finish_date ? parseDateOnly(fc.estimated_finish_date) : null,
+      as_of_date: parseDateOnly(fc.as_of_date),
     };
     forecastId = fc.id;
   }

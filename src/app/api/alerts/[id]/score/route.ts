@@ -3,6 +3,7 @@ import { query } from "@/lib/db";
 import { getSessionFromRequest } from "@/lib/auth/request-session";
 import { recalculateAlert, getAsOfDate } from "@/lib/scoring/recalculate";
 import { VALID_RATINGS } from "@/lib/scoring/engine";
+import { normalizePolicy, MAX_TOTAL } from "@/lib/scoring/policy";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -50,12 +51,23 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: "target, value, and reason are required" }, { status: 400 });
   }
 
-  const validTargets = ["market_access", "cost_to_implement", "human_resources", "urgency"];
+  const validTargets = ["market_access", "cost_to_implement", "urgency", "total"];
   if (!validTargets.includes(target)) {
     return NextResponse.json({ error: `Invalid target. Must be one of: ${validTargets.join(", ")}` }, { status: 400 });
   }
 
-  if (!VALID_RATINGS.includes(value as 1 | 3 | 6 | 9)) {
+  if (target === "total") {
+    const policyRes = await query(
+      `SELECT sp.rules_json FROM companies c JOIN scoring_policies sp ON sp.id = c.active_policy_id WHERE c.id = $1`,
+      [session.membership.company_id]
+    );
+    if (!normalizePolicy(policyRes.rows[0]?.rules_json).total_override_enabled) {
+      return NextResponse.json({ error: "Total score overrides are turned off in the scoring policy" }, { status: 400 });
+    }
+    if (!Number.isInteger(value) || value < 1 || value > MAX_TOTAL) {
+      return NextResponse.json({ error: `Total must be a whole number from 1 to ${MAX_TOTAL}` }, { status: 400 });
+    }
+  } else if (!VALID_RATINGS.includes(value as 1 | 3 | 6 | 9)) {
     return NextResponse.json({ error: "Value must be 1, 3, 6, or 9" }, { status: 400 });
   }
 
@@ -89,5 +101,41 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const asOfDate = getAsOfDate(session.company.time_zone);
   const result = await recalculateAlert(id, session.membership.company_id, asOfDate, "override");
 
+  return NextResponse.json({ success: true, assessment: result });
+}
+
+/** Clear the active override for one factor (DELETE /api/alerts/:id/score?target=market_access). */
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const session = await getSessionFromRequest(request);
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const target = new URL(request.url).searchParams.get("target");
+  const validTargets = ["market_access", "cost_to_implement", "urgency", "total"];
+  if (!target || !validTargets.includes(target)) {
+    return NextResponse.json({ error: `target must be one of: ${validTargets.join(", ")}` }, { status: 400 });
+  }
+
+  const ended = await query(
+    `UPDATE score_overrides SET ended_at = NOW()
+     WHERE alert_id = $1 AND company_id = $2 AND target = $3 AND ended_at IS NULL
+     RETURNING value`,
+    [id, session.membership.company_id, target]
+  );
+  if (ended.rows.length === 0) {
+    return NextResponse.json({ error: "No active override for that factor" }, { status: 404 });
+  }
+
+  await query(
+    `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, before_values, after_values, reason)
+     VALUES ($1, $2, 'score_override_cleared', 'alert', $3, $4, '{}', 'Override cleared')`,
+    [session.membership.company_id, session.membership.id, id, JSON.stringify({ target, value: ended.rows[0].value })]
+  );
+
+  const asOfDate = getAsOfDate(session.company.time_zone);
+  const result = await recalculateAlert(id, session.membership.company_id, asOfDate, "override_cleared");
   return NextResponse.json({ success: true, assessment: result });
 }

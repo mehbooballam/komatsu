@@ -28,20 +28,63 @@ if [ "$NODE_VERSION" -lt 20 ]; then
 fi
 echo "  Node.js $(node -v) OK"
 
+DB_MODE="psql"
 if ! command -v psql &> /dev/null; then
-  echo "ERROR: PostgreSQL client (psql) not found."
-  echo "  macOS:  brew install postgresql@16"
-  echo "  Ubuntu: sudo apt install postgresql-client-16"
-  exit 1
+  if command -v docker &> /dev/null && docker info &> /dev/null; then
+    DB_MODE="docker"
+    echo "  psql not found — using Docker for PostgreSQL"
+  else
+    echo "ERROR: Neither the PostgreSQL client (psql) nor a running Docker was found."
+    echo "  macOS:   brew install postgresql@16"
+    echo "  Ubuntu:  sudo apt install postgresql-client-16"
+    echo "  Windows: install Docker Desktop and start it, then re-run this script"
+    exit 1
+  fi
+else
+  echo "  psql OK"
 fi
-echo "  psql OK"
 
-# 2. Create database user and database
+# 2. Set up .env file
+echo ""
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "Created .env from .env.example"
+else
+  echo ".env already exists — skipping"
+fi
+
+# 3. Create database user and database
 echo ""
 echo "Setting up PostgreSQL database..."
 
+if [ "$DB_MODE" = "docker" ]; then
+  # A dedicated container on its own port, so it never clashes with another
+  # Postgres already bound to 5432.
+  DB_CONTAINER="${DB_CONTAINER:-komatsu-dev-postgres}"
+  DB_PORT="${DB_DOCKER_PORT:-5433}"
+
+  if docker ps -a --format '{{.Names}}' | grep -qx "$DB_CONTAINER"; then
+    docker start "$DB_CONTAINER" > /dev/null
+    echo "  Started existing container '$DB_CONTAINER'"
+  else
+    docker run -d --name "$DB_CONTAINER" \
+      -e POSTGRES_USER="$DB_USER" -e POSTGRES_PASSWORD="$DB_PASS" -e POSTGRES_DB="$DB_NAME" \
+      -p "$DB_PORT:5432" postgres:17-alpine > /dev/null
+    echo "  Created container '$DB_CONTAINER' on port $DB_PORT"
+  fi
+
+  echo "  Waiting for PostgreSQL to accept connections..."
+  for _ in $(seq 1 60); do
+    docker exec "$DB_CONTAINER" pg_isready -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" &> /dev/null && break
+    sleep 1
+  done
+
+  DATABASE_URL="postgresql://$DB_USER:$DB_PASS@$DB_HOST:$DB_PORT/$DB_NAME"
+  sed -i.bak "s#^DATABASE_URL=.*#DATABASE_URL=$DATABASE_URL#" .env && rm -f .env.bak
+  echo "  Set DATABASE_URL in .env to port $DB_PORT"
+
 # Check if we can connect to PostgreSQL
-if ! psql -h "$DB_HOST" -p "$DB_PORT" -U postgres -c "SELECT 1" &> /dev/null; then
+elif ! psql -h "$DB_HOST" -p "$DB_PORT" -U postgres -c "SELECT 1" &> /dev/null; then
   echo "WARNING: Cannot connect as postgres superuser."
   echo "  If the DB user and database already exist, that's fine — continuing."
   echo "  Otherwise, create them manually:"
@@ -65,15 +108,6 @@ else
     psql -h "$DB_HOST" -p "$DB_PORT" -U postgres -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
     echo "  Created database '$DB_NAME'"
   fi
-fi
-
-# 3. Set up .env file
-echo ""
-if [ ! -f .env ]; then
-  cp .env.example .env
-  echo "Created .env from .env.example"
-else
-  echo ".env already exists — skipping"
 fi
 
 # 4. Install dependencies
@@ -101,7 +135,4 @@ echo "  npm run dev"
 echo ""
 echo "Open http://localhost:3000"
 echo ""
-echo "Demo accounts:"
-echo "  Admin:   demo@komatsu.com / Demo1234!"
-echo "  Manager: manager@komatsu.com / Manager1234!"
-echo "  Owner:   owner@komatsu.com / Owner1234!"
+echo "Sign in with the admin login printed above, then upload your alerts on the Imports page."

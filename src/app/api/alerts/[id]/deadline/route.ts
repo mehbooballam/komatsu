@@ -35,6 +35,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!date_value || !kind) {
     return NextResponse.json({ error: "date_value and kind are required" }, { status: 400 });
   }
+  if (typeof date_value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date_value) || Number.isNaN(Date.parse(date_value))) {
+    return NextResponse.json({ error: "Enter a valid date (YYYY-MM-DD)" }, { status: 400 });
+  }
+  if (applies_to && String(applies_to).length > 300) {
+    return NextResponse.json({ error: "Note is too long (max 300 characters)" }, { status: 400 });
+  }
 
   const validKinds = ["compliance", "comment", "effective", "internal", "proposed", "unknown"];
   if (!validKinds.includes(kind)) {

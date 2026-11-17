@@ -113,7 +113,7 @@ export default function MyRisksPage() {
                                 ? "text-[var(--priority-moderate)]"
                                 : "text-[var(--muted-foreground)]"
                             }>
-                              {new Date(alert.next_compliance_deadline).toLocaleDateString()}
+                              {new Date(`${String(alert.next_compliance_deadline).slice(0, 10)}T00:00:00`).toLocaleDateString()}
                               {alert.days_remaining !== null && (
                                 <> ({alert.days_remaining < 0 ? `${Math.abs(alert.days_remaining)}d overdue` : `${alert.days_remaining}d`})</>
                               )}

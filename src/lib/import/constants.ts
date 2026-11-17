@@ -66,7 +66,7 @@ export const COLUMN_DEFS: ColumnDef[] = [
   { name: "change_type", label: "Change Type", type: "text", required: false, description: "Source change classification." },
   { name: "market_access_risk", label: "Market Access Risk", type: "integer", required: false, description: "Imported market-access rating (1, 3, 6, or 9)." },
   { name: "cost_to_implement", label: "Cost to Implement", type: "integer", required: false, description: "Imported implementation-cost rating (1, 3, 6, or 9)." },
-  { name: "human_resources", label: "Human Resources", type: "integer", required: false, description: "Imported people rating (1, 3, 6, or 9)." },
+  { name: "human_resources", label: "Human Resources (legacy)", type: "integer", required: false, description: "Legacy people rating. Optional — kept in upload history, not used in the score." },
   { name: "urgency", label: "Urgency", type: "integer", required: false, description: "Imported urgency snapshot." },
   { name: "overall_impact_score", label: "Overall Impact Score", type: "integer", required: false, description: "Imported total snapshot." },
   { name: "market_access_risk_rationale", label: "Market Access Risk Rationale", type: "text", required: false, description: "Imported market-access explanation." },

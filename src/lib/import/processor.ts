@@ -8,6 +8,8 @@ import {
   type ImportColumnName,
 } from "./constants";
 import type { ValidatedRow } from "./validator";
+import { resolveJurisdiction } from "@/lib/geo/countries";
+import { getAsOfDate, recalculateAlert } from "@/lib/scoring/recalculate";
 
 export interface ProcessResult {
   created: number;
@@ -61,11 +63,15 @@ export async function processImportBatch(
   result.conflicts += skippedDups.length;
   result.invalid += rows.filter((r) => !r.isValid).length;
 
+  const touchedAlertIds: string[] = [];
   const client = await getClient();
   try {
     await client.query("BEGIN");
 
     for (const row of processableRows) {
+      // Savepoint per row: a failing row is rolled back on its own instead of
+      // aborting the whole transaction for every row after it.
+      await client.query("SAVEPOINT import_row");
       try {
         const alertId = row.parsed.alert_id as string;
         const rowHash = computeRowHash(row.mapped);
@@ -92,6 +98,7 @@ export async function processImportBatch(
             [newAlertId, batchId, row.rowNumber]
           );
           result.created++;
+          touchedAlertIds.push(newAlertId);
         } else {
           const existing = existingResult.rows[0];
           if (existing.row_hash === rowHash) {
@@ -107,9 +114,17 @@ export async function processImportBatch(
               [existing.id, batchId, row.rowNumber]
             );
             result.updated++;
+            touchedAlertIds.push(existing.id);
           }
         }
+        await client.query("RELEASE SAVEPOINT import_row");
       } catch (err) {
+        await client.query("ROLLBACK TO SAVEPOINT import_row");
+        console.error(`Import row ${row.rowNumber} failed:`, err);
+        await client.query(
+          `UPDATE import_rows SET state = 'invalid' WHERE batch_id = $1 AND row_number = $2`,
+          [batchId, row.rowNumber]
+        );
         result.errors.push({
           rowNumber: row.rowNumber,
           message: err instanceof Error ? err.message : "Unknown error",
@@ -144,7 +159,50 @@ export async function processImportBatch(
     client.release();
   }
 
+  await postProcessAlerts(companyId, touchedAlertIds, result);
+
   return result;
+}
+
+/**
+ * After the import commits: map each alert's jurisdiction to countries (so it
+ * appears on the heat map) and compute its risk score (so it gets a priority
+ * band). Failures here are reported per row but never undo the import.
+ */
+async function postProcessAlerts(companyId: string, alertIds: string[], result: ProcessResult) {
+  if (alertIds.length === 0) return;
+
+  const companyRes = await query(`SELECT time_zone FROM companies WHERE id = $1`, [companyId]);
+  const asOfDate = getAsOfDate(companyRes.rows[0]?.time_zone || "UTC");
+
+  const geoRes = await query(`SELECT id, code FROM geographies WHERE level = 'country'`);
+  const geoIdByCode = new Map<string, string>(geoRes.rows.map((g) => [g.code, g.id]));
+
+  for (const alertId of alertIds) {
+    try {
+      const alertRes = await query(`SELECT jurisdiction_raw FROM alerts WHERE id = $1`, [alertId]);
+      const codes = resolveJurisdiction(alertRes.rows[0]?.jurisdiction_raw);
+      for (const code of codes) {
+        const geographyId = geoIdByCode.get(code);
+        if (!geographyId) continue;
+        await query(
+          `INSERT INTO alert_geographies (company_id, alert_id, geography_id, state, source_evidence)
+           SELECT $1, $2, $3, 'mapped', 'Import: jurisdiction'
+           WHERE NOT EXISTS (
+             SELECT 1 FROM alert_geographies WHERE alert_id = $2 AND geography_id = $3
+           )`,
+          [companyId, alertId, geographyId]
+        );
+      }
+      await recalculateAlert(alertId, companyId, asOfDate, "import");
+    } catch (err) {
+      console.error(`Post-import processing failed for alert ${alertId}:`, err);
+      result.errors.push({
+        rowNumber: 0,
+        message: `Alert saved, but mapping/scoring failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+      });
+    }
+  }
 }
 
 async function createAlert(

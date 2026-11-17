@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { cookies } from "next/headers";
 import crypto from "crypto";
+import { loadGroupTree, inGroupSubtreeSql } from "@/lib/groups";
+import { alertProducts } from "@/lib/products";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function getAuth() {
   const cookieStore = await cookies();
@@ -14,8 +18,8 @@ async function getAuth() {
      JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
      JOIN companies c ON c.id = m.company_id
      WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY s.last_active_at DESC LIMIT 1`,
-    [tokenHash]
+     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
+    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
   );
   return res.rows[0] || null;
 }
@@ -37,7 +41,10 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const perPage = Math.min(100, Math.max(1, parseInt(searchParams.get("per_page") || "25")));
   const offset = (page - 1) * perPage;
-  const searchQuery = searchParams.get("q");
+  const searchQuery = searchParams.get("q") ?? searchParams.get("search");
+  // Comma-separated multi-value filters: ?priority=critical,high
+  const list = (key: string) =>
+    (searchParams.get(key) || "").split(",").map((v) => v.trim()).filter(Boolean);
   const sortBy = searchParams.get("sort") || "priority";
   const sortDir = searchParams.get("dir") === "asc" ? "ASC" : "DESC";
 
@@ -46,44 +53,60 @@ export async function GET(request: NextRequest) {
   let paramIdx = 2;
 
   // Filter: priority
-  const priority = searchParams.get("priority");
-  if (priority) {
-    filters.push(`p.effective_priority = $${paramIdx}`);
-    params.push(priority);
+  const priorities = list("priority");
+  if (priorities.length) {
+    const wantsUnscored = priorities.includes("unscored");
+    filters.push(
+      wantsUnscored
+        ? `(p.effective_priority = ANY($${paramIdx}::text[]) OR p.effective_priority IS NULL)`
+        : `p.effective_priority = ANY($${paramIdx}::text[])`
+    );
+    params.push(priorities);
     paramIdx++;
   }
 
   // Filter: stage
-  const stage = searchParams.get("stage");
-  if (stage) {
-    filters.push(`a.stage = $${paramIdx}`);
-    params.push(stage);
+  const stages = list("stage");
+  if (stages.length) {
+    filters.push(`a.stage = ANY($${paramIdx}::text[])`);
+    params.push(stages);
     paramIdx++;
   }
 
   // Filter: geography
-  const geography = searchParams.get("geography");
-  if (geography) {
+  const geographies = list("geography");
+  if (geographies.includes("unmapped")) {
+    filters.push(`NOT EXISTS (
+      SELECT 1 FROM alert_geographies ag WHERE ag.alert_id = a.id AND ag.state != 'rejected'
+    )`);
+  } else if (geographies.length) {
     filters.push(`EXISTS (
       SELECT 1 FROM alert_geographies ag
       JOIN geographies g ON g.id = ag.geography_id
-      WHERE ag.alert_id = a.id AND g.code = $${paramIdx} AND ag.state != 'rejected'
+      WHERE ag.alert_id = a.id AND g.code = ANY($${paramIdx}::text[]) AND ag.state != 'rejected'
     )`);
-    params.push(geography);
+    params.push(geographies);
     paramIdx++;
   }
 
   // Filter: group
   const groupId = searchParams.get("group_id");
-  if (groupId) {
-    filters.push(`a.primary_group_id = $${paramIdx}`);
+  if (groupId === "none") {
+    filters.push(`a.primary_group_id IS NULL`);
+  } else if (groupId && !UUID_RE.test(groupId)) {
+    filters.push("FALSE");
+  } else if (groupId) {
+    // A group includes everything filed in its sub-groups too
+    filters.push(inGroupSubtreeSql("a.primary_group_id", `$${paramIdx}`));
     params.push(groupId);
     paramIdx++;
   }
 
   // Filter: owner
   const ownerId = searchParams.get("owner_id");
-  if (ownerId) {
+  if (ownerId === "unassigned") {
+    filters.push(`COALESCE(a.direct_owner_membership_id, (SELECT owner_membership_id FROM regulation_groups WHERE id = a.primary_group_id)) IS NULL`);
+  } else if (ownerId) {
     filters.push(`(a.direct_owner_membership_id = $${paramIdx} OR
       (a.direct_owner_membership_id IS NULL AND a.primary_group_id IN (
         SELECT id FROM regulation_groups WHERE owner_membership_id = $${paramIdx}
@@ -102,7 +125,11 @@ export async function GET(request: NextRequest) {
 
   // Filter: deadline window
   const deadlineWithin = searchParams.get("deadline_within");
-  if (deadlineWithin) {
+  if (deadlineWithin === "overdue") {
+    filters.push(`p.next_compliance_deadline IS NOT NULL AND p.next_compliance_deadline < CURRENT_DATE`);
+  } else if (deadlineWithin === "none") {
+    filters.push(`p.next_compliance_deadline IS NULL`);
+  } else if (deadlineWithin && /^\d+$/.test(deadlineWithin)) {
     filters.push(`p.next_compliance_deadline IS NOT NULL AND p.next_compliance_deadline <= (CURRENT_DATE + ($${paramIdx} || ' days')::INTERVAL)`);
     params.push(deadlineWithin);
     paramIdx++;
@@ -198,9 +225,13 @@ export async function GET(request: NextRequest) {
        rg.title AS group_title,
        rg.id AS group_id,
        owner_m.id AS owner_membership_id,
-       owner_u.display_name AS owner_name
+       owner_u.display_name AS owner_name,
+       owner_u.preferences->>'avatar' AS owner_avatar,
+       sa.base_band AS score_band,
+       sa.escalation_reasons
      FROM alerts a
      LEFT JOIN alert_active_projections p ON p.alert_id = a.id AND p.company_id = a.company_id
+     LEFT JOIN score_assessments sa ON sa.id = p.latest_assessment_id
      LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id
      LEFT JOIN memberships owner_m ON owner_m.id = COALESCE(a.direct_owner_membership_id, rg.owner_membership_id)
      LEFT JOIN user_profiles owner_u ON owner_u.id = owner_m.user_id
@@ -212,8 +243,8 @@ export async function GET(request: NextRequest) {
 
   // Fetch geographies for displayed alerts
   const alertIds = alertsResult.rows.map((r: { id: string }) => r.id);
-  let geoMap: Record<string, string[]> = {};
-  let productMap: Record<string, string[]> = {};
+  const geoMap: Record<string, string[]> = {};
+  const productMap: Record<string, string[]> = {};
 
   if (alertIds.length > 0) {
     const geoResult = await query(
@@ -228,21 +259,13 @@ export async function GET(request: NextRequest) {
       geoMap[row.alert_id].push(row.display_name);
     }
 
-    const prodResult = await query(
-      `SELECT apl.alert_id,
-              COALESCE(pf.name, pr.name) AS product_name,
-              apl.state AS link_state
-       FROM alert_product_links apl
-       LEFT JOIN product_families pf ON pf.id = apl.family_id
-       LEFT JOIN products pr ON pr.id = apl.product_id
-       WHERE apl.alert_id = ANY($1) AND apl.state != 'rejected'`,
-      [alertIds]
-    );
-    for (const row of prodResult.rows) {
-      if (!productMap[row.alert_id]) productMap[row.alert_id] = [];
-      productMap[row.alert_id].push(row.product_name);
-    }
   }
+
+  const tree = await loadGroupTree(auth.company_id);
+  const groupPaths = new Map(tree.map((g) => [g.id, g.path]));
+  // Products attached to the alert plus those inherited from its group and parent groups
+  const attached = await alertProducts(auth.company_id, alertIds, tree);
+  for (const [id, list] of attached) productMap[id] = list.map((p) => p.name);
 
   const alerts = alertsResult.rows.map((row: Record<string, unknown>) => ({
     id: row.id,
@@ -259,12 +282,17 @@ export async function GET(request: NextRequest) {
     timing_raw: row.timing_raw,
     effective_total: row.effective_total,
     effective_priority: row.effective_priority || "unscored",
+    // Band from the numeric score alone, before escalation rules raise it
+    score_band: row.score_band || (row.effective_total == null ? "unscored" : null),
+    escalation_reasons: row.escalation_reasons || [],
     next_compliance_deadline: row.next_compliance_deadline,
     days_remaining: row.days_remaining,
     group_id: row.group_id,
     group_title: row.group_title,
+    group_path: row.group_id ? groupPaths.get(row.group_id as string) || [row.group_title] : null,
     owner_membership_id: row.owner_membership_id,
     owner_name: row.owner_name,
+    owner_avatar: row.owner_avatar || null,
     record_version: row.record_version,
   }));
 

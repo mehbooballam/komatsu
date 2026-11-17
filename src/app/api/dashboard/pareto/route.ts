@@ -14,8 +14,8 @@ async function getAuth() {
      JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
      JOIN companies c ON c.id = m.company_id
      WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY s.last_active_at DESC LIMIT 1`,
-    [tokenHash]
+     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
+    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
   );
   return res.rows[0] || null;
 }
