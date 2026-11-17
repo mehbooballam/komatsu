@@ -1,8 +1,9 @@
 import pg from "pg";
 import crypto from "crypto";
+import "dotenv/config";
 
 const pool = new pg.Pool({
-  connectionString: "postgresql://komatsu:komatsu_dev_2024@127.0.0.1:5432/komatsu_dev",
+  connectionString: process.env.DATABASE_URL || "postgresql://komatsu:komatsu_dev_2024@127.0.0.1:5432/komatsu_dev",
 });
 
 const AS_OF_DATE = "2026-11-17";

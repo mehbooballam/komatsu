@@ -1,3 +1,4 @@
+import "dotenv/config";
 import pg from "pg";
 import { seed } from "./seed";
 import { seedAlerts } from "./seed-alerts";
@@ -51,7 +52,7 @@ async function main() {
 
   // Close all pool connections
   const pool = new pg.Pool({
-    connectionString: "postgresql://komatsu:komatsu_dev_2024@127.0.0.1:5432/komatsu_dev",
+    connectionString: process.env.DATABASE_URL || "postgresql://komatsu:komatsu_dev_2024@127.0.0.1:5432/komatsu_dev",
   });
   await pool.end().catch(() => {});
   process.exit(0);

@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/run-seed.ts",
+    "db:reset": "npm run db:migrate && npm run db:seed",
+    "setup": "npm install && npm run db:reset"
   },
   "dependencies": {
     "@auth/core": "^0.41.3",

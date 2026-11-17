@@ -1,36 +1,139 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Komatsu Regulatory Risk Dashboard
 
-## Getting Started
+A regulatory risk management dashboard built with Next.js, PostgreSQL, and TypeScript. Tracks regulatory alerts, scores them on a 4-factor model (market access, cost, HR, urgency), and surfaces prioritized risks with deadlines, assignments, and geographic breakdowns.
 
-First, run the development server:
+## Local Development Setup
+
+### Prerequisites
+
+- **Node.js 20+** — [nodejs.org](https://nodejs.org)
+- **PostgreSQL 16** — [postgresql.org/download](https://www.postgresql.org/download/)
+
+### Quick Start (one command)
+
+```bash
+./scripts/setup.sh
+```
+
+This creates the database user/database, installs dependencies, runs migrations, and seeds demo data. Requires the `postgres` superuser to be accessible (default on macOS Homebrew and most Linux installs).
+
+### Manual Setup
+
+#### 1. Install dependencies
+
+```bash
+npm install
+```
+
+#### 2. Create PostgreSQL database
+
+```bash
+createuser -P komatsu
+# Enter password: komatsu_dev_2024
+
+createdb -O komatsu komatsu_dev
+```
+
+Or via `psql`:
+
+```sql
+CREATE USER komatsu WITH PASSWORD 'komatsu_dev_2024';
+CREATE DATABASE komatsu_dev OWNER komatsu;
+```
+
+#### 3. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+The defaults in `.env.example` match the seed scripts — no changes needed for local dev.
+
+#### 4. Run migrations
+
+```bash
+npm run db:migrate
+```
+
+#### 5. Seed demo data
+
+```bash
+npm run db:seed
+```
+
+#### 6. Start the dev server
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Demo Accounts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | demo@komatsu.com | Demo1234! |
+| Manager | manager@komatsu.com | Manager1234! |
+| Risk Owner | owner@komatsu.com | Owner1234! |
 
-## Learn More
+## NPM Scripts
 
-To learn more about Next.js, take a look at the following resources:
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start dev server (Turbopack) |
+| `npm run build` | Production build |
+| `npm start` | Start production server |
+| `npm run lint` | Run ESLint |
+| `npm run db:migrate` | Run database migrations |
+| `npm run db:seed` | Seed database with demo data |
+| `npm run db:reset` | Migrate + seed (full reset) |
+| `npm run setup` | Install deps + migrate + seed |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Architecture
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Framework**: Next.js 16 App Router with TypeScript
+- **Database**: PostgreSQL 16 (41 tables)
+- **Auth**: Custom session-based auth with bcrypt passwords and SHA-256 token hashing
+- **Styling**: Tailwind CSS 4 with Radix UI components
+- **Charts**: Recharts
 
-## Deploy on Vercel
+### Scoring Model
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Alerts are scored on 4 factors, each rated 1, 3, 6, or 9:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Market Access** — revenue at risk
+- **Cost to Implement** — compliance cost
+- **Human Resources** — FTE required
+- **Urgency** — time to deadline
+
+**Raw score** = Market Access x Cost x HR x Urgency
+
+| Band | Score Range |
+|------|-------------|
+| Low | 1 – 80 |
+| Moderate | 81 – 323 |
+| High | 324 – 1,295 |
+| Critical | 1,296 – 6,561 |
+
+Three escalation rules can override the band upward.
+
+## Project Structure
+
+```
+src/
+  app/              # Next.js App Router pages and API routes
+    (dashboard)/    # Dashboard layout group
+    api/            # REST API endpoints
+  components/       # React components (ui/, dashboard/, alerts/)
+  lib/              # Shared utilities (db, auth, scoring)
+  db/
+    migrations/     # SQL migration files
+scripts/
+  setup.sh          # One-command local setup
+  migrate.ts        # Migration runner
+  seed.ts           # Base data seeder
+  seed-alerts.ts    # Alert + scoring seeder
+  run-seed.ts       # Combined seed runner
+templates/          # Generated import template files
+```
