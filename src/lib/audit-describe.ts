@@ -260,6 +260,15 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
       };
     case "alert_updated":
       return { category: "alerts", summary: ["Updated ", alert()], changes: diff(before, after, refs), note };
+    case "geography_mapping_updated": {
+      const countries = (value: unknown) =>
+        Array.isArray(value) && value.length ? value.join(", ") : "Unmapped";
+      return {
+        category: "alerts",
+        summary: ["Updated the country mapping for ", alert()],
+        changes: [{ label: "Countries", before: countries(b.countries), after: countries(a.countries) }],
+      };
+    }
 
     /* ---- Groups ---- */
     case "link_alert":

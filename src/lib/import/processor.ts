@@ -190,10 +190,8 @@ async function postProcessAlerts(companyId: string, alertIds: string[], result: 
         if (!geographyId) continue;
         await query(
           `INSERT INTO alert_geographies (company_id, alert_id, geography_id, state, source_evidence)
-           SELECT $1, $2, $3, 'mapped', 'Import: jurisdiction'
-           WHERE NOT EXISTS (
-             SELECT 1 FROM alert_geographies WHERE alert_id = $2 AND geography_id = $3
-           )`,
+           VALUES ($1, $2, $3, 'mapped', 'Import: jurisdiction')
+           ON CONFLICT (alert_id, geography_id) DO NOTHING`,
           [companyId, alertId, geographyId]
         );
       }

@@ -5,6 +5,7 @@ import {
   MoreHorizontal, Eye, UserPlus, Tag, Check, ChevronUp, ChevronDown, Loader2, X, Plus, CalendarClock, AlertTriangle, Trash2, ArrowUp, CalendarPlus, Package,
 } from "lucide-react";
 import { DeadlineDialog } from "@/components/alerts/deadline-dialog";
+import { AlertCountryMapping } from "@/components/alerts/alert-country-mapping";
 import { AlertProductsPicker, BulkProductsPicker } from "@/components/products/product-picker";
 import { UserAvatar } from "@/components/ui/brand";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -620,6 +621,19 @@ export function AlertsTable({
                           <div className="max-w-[160px] truncate text-[13px] text-slate-700 dark:text-slate-300">
                             {a.geographies && a.geographies.length > 0 ? a.geographies.join(", ") : <span className="text-slate-400">{a.jurisdiction_raw || "—"}</span>}
                           </div>
+                          {canEdit && role && a.geographies?.length === 0 && (
+                            <div className="mt-1.5">
+                              <AlertCountryMapping
+                                alertId={a.id}
+                                alertTitle={a.title}
+                                jurisdiction={a.jurisdiction_raw}
+                                onSaved={(text) => {
+                                  setMessage({ ok: true, text });
+                                  onChanged?.();
+                                }}
+                              />
+                            </div>
+                          )}
                         </td>
                       )}
                       <td className="border-t border-slate-100 px-4 py-3 dark:border-slate-800" onClick={(e) => canEdit && e.stopPropagation()}>

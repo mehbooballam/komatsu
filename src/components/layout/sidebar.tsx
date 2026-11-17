@@ -10,6 +10,10 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { workspaceHome } from "@/lib/auth/permissions";
+import {
+  COLLAPSED_SIDEBAR_WIDTH, DESKTOP_SIDEBAR_KEY, MOBILE_MENU_KEY,
+  readSidebarPreference, writeSidebarPreference,
+} from "@/lib/sidebar-preferences";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UserAvatar, WorkspaceIcon, WorkspaceLogo } from "@/components/ui/brand";
 import {
@@ -256,11 +260,23 @@ function RiskOrbitBrand({ href, compact = false, onClick }: { href: string; comp
 export function Sidebar({ user, company, role, workspaceWide, companies = [] }: SidebarProps) {
   const pathname = usePathname();
   const logoutForm = useRef<HTMLFormElement>(null);
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => readSidebarPreference(DESKTOP_SIDEBAR_KEY));
+  const [mobileOpen, setMobileOpen] = useState(() => readSidebarPreference(MOBILE_MENU_KEY));
   const { theme, toggle } = useTheme();
   const homeHref = workspaceHome(role, workspaceWide ? "company" : "assigned");
-  const sidebarWidth = collapsed ? "64px" : "var(--sidebar-width)";
+  const sidebarWidth = collapsed ? COLLAPSED_SIDEBAR_WIDTH : "var(--sidebar-width)";
+
+  const toggleSidebar = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    writeSidebarPreference(DESKTOP_SIDEBAR_KEY, next);
+  };
+
+  const updateMobileMenu = (open: boolean) => {
+    setMobileOpen(open);
+    writeSidebarPreference(MOBILE_MENU_KEY, open);
+  };
+  const closeMobileMenu = () => updateMobileMenu(false);
 
   // Let the main content follow the sidebar width.
   useEffect(() => {
@@ -275,7 +291,7 @@ export function Sidebar({ user, company, role, workspaceWide, companies = [] }: 
     .filter((s) => s.items.length > 0);
 
 
-  const renderContent = (isCollapsed: boolean) => (
+  const renderContent = (isCollapsed: boolean, onNavigate?: () => void) => (
     <div className="flex min-h-0 flex-1 flex-col text-[var(--sidebar-fg)]">
       {/* Workspace (below the product brand) */}
       <div className={cn("px-3 pt-3", isCollapsed && "flex justify-center px-0")}>
@@ -311,7 +327,7 @@ export function Sidebar({ user, company, role, workspaceWide, companies = [] }: 
                     )}
                     title={isCollapsed ? item.label : undefined}
                     aria-current={isActive ? "page" : undefined}
-                    onClick={() => setMobileOpen(false)}
+                    onClick={onNavigate}
                   >
                     {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-[var(--sidebar-gold)]" />}
                     <item.icon aria-hidden="true" className={cn("h-[18px] w-[18px] shrink-0", isActive ? "text-[var(--sidebar-accent)]" : "text-[var(--sidebar-muted)] group-hover:text-[var(--sidebar-strong)]")} />
@@ -370,10 +386,10 @@ export function Sidebar({ user, company, role, workspaceWide, companies = [] }: 
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href="/profile"><User className="mr-2 h-4 w-4" /> My profile</Link>
+              <Link href="/profile" onClick={onNavigate}><User className="mr-2 h-4 w-4" /> My profile</Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
-              <Link href="/profile#password"><KeyRound className="mr-2 h-4 w-4" /> Change password</Link>
+              <Link href="/profile#password" onClick={onNavigate}><KeyRound className="mr-2 h-4 w-4" /> Change password</Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-red-600" onSelect={() => logoutForm.current?.requestSubmit()}>
@@ -392,7 +408,7 @@ export function Sidebar({ user, company, role, workspaceWide, companies = [] }: 
       <div className="fixed inset-x-0 top-0 z-40 grid h-14 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--sidebar-border)] bg-[var(--sidebar-bg)] px-3 shadow-sm lg:hidden">
         <button
           type="button"
-          onClick={() => setMobileOpen((wasOpen) => !wasOpen)}
+          onClick={() => updateMobileMenu(!mobileOpen)}
           aria-controls="mobile-sidebar"
           aria-expanded={mobileOpen}
           aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
@@ -400,16 +416,16 @@ export function Sidebar({ user, company, role, workspaceWide, companies = [] }: 
         >
           <Menu aria-hidden="true" className="h-5 w-5" />
         </button>
-        <RiskOrbitBrand href={homeHref} onClick={() => setMobileOpen(false)} />
+        <RiskOrbitBrand href={homeHref} onClick={closeMobileMenu} />
       </div>
 
       {/* Mobile drawer */}
       <div id="mobile-sidebar" className="lg:hidden">
         {mobileOpen && (
           <div className="fixed inset-x-0 bottom-0 top-14 z-50">
-            <div aria-hidden="true" className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
+            <div aria-hidden="true" className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={closeMobileMenu} />
             <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-[var(--sidebar-bg)] shadow-2xl">
-              {renderContent(false)}
+              {renderContent(false, closeMobileMenu)}
             </div>
           </div>
         )}
@@ -425,7 +441,7 @@ export function Sidebar({ user, company, role, workspaceWide, companies = [] }: 
           <RiskOrbitBrand href={homeHref} compact={collapsed} />
           <button
             type="button"
-            onClick={() => setCollapsed((wasCollapsed) => !wasCollapsed)}
+            onClick={toggleSidebar}
             aria-controls="desktop-sidebar"
             aria-expanded={!collapsed}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}

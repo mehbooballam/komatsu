@@ -214,7 +214,9 @@ export default function AlertsPage() {
         if (cancelled) return;
         if (data) {
           setAlerts(data.alerts || []);
-          setTotal(data.pagination?.total ?? 0);
+          const nextTotal = data.pagination?.total ?? 0;
+          setTotal(nextTotal);
+          setPage((current) => Math.min(current, Math.max(1, Math.ceil(nextTotal / PAGE_SIZE))));
         }
         setLoadedKey(`${alertsQuery}#${refreshKey}`);
       });

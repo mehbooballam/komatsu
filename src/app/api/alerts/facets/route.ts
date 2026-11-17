@@ -21,10 +21,20 @@ export async function GET() {
     query(
       `SELECT g.code AS value, g.display_name AS label, COUNT(DISTINCT a.id)::int AS count
        FROM alert_geographies ag
-       JOIN geographies g ON g.id = ag.geography_id
+       JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
        JOIN alerts a ON a.id = ag.alert_id AND a.company_id = ag.company_id AND a.archived_at IS NULL
        WHERE ag.company_id = $1 AND ag.state <> 'rejected'
-       GROUP BY g.code, g.display_name ORDER BY count DESC, label`,
+       GROUP BY g.code, g.display_name
+       UNION ALL
+       SELECT 'unmapped', 'Unmapped', COUNT(*)::int
+       FROM alerts a
+       WHERE a.company_id = $1 AND a.archived_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM alert_geographies ag
+           JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
+           WHERE ag.alert_id = a.id AND ag.company_id = a.company_id AND ag.state <> 'rejected'
+         )
+       ORDER BY count DESC, label`,
       [companyId]
     ),
     loadGroupTree(companyId),

@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
        COUNT(DISTINCT a.id) FILTER (WHERE p.effective_priority = 'low') AS low_count,
        COUNT(DISTINCT a.id) FILTER (WHERE p.effective_priority IS NULL OR p.effective_priority = 'unscored') AS unscored_count
      FROM alert_geographies ag
-     JOIN geographies g ON g.id = ag.geography_id
+     JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
      JOIN alerts a ON a.id = ag.alert_id AND a.company_id = ag.company_id AND a.archived_at IS NULL
      LEFT JOIN alert_active_projections p ON p.alert_id = a.id AND p.company_id = a.company_id
      WHERE ag.company_id = $1 AND ag.state != 'rejected'${filterClauses}
@@ -52,9 +52,13 @@ export async function GET(request: NextRequest) {
   const unmappedRes = await query(
     `SELECT COUNT(DISTINCT a.id) AS unmapped_count
      FROM alerts a
-     LEFT JOIN alert_geographies ag ON ag.alert_id = a.id AND ag.company_id = a.company_id AND ag.state != 'rejected'
      LEFT JOIN alert_active_projections p ON p.alert_id = a.id AND p.company_id = a.company_id
-     WHERE a.company_id = $1 AND a.archived_at IS NULL AND ag.id IS NULL${filterClauses}`,
+     WHERE a.company_id = $1 AND a.archived_at IS NULL${filterClauses}
+       AND NOT EXISTS (
+         SELECT 1 FROM alert_geographies ag
+         JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
+         WHERE ag.alert_id = a.id AND ag.company_id = a.company_id AND ag.state <> 'rejected'
+       )`,
     params
   );
 

@@ -11,7 +11,10 @@ import { SessionContext, SessionRefreshContext, type SessionInfo } from "@/compo
 /** Placeholder shown in the sidebar slot while the session loads. */
 function SidebarSkeleton() {
   return (
-    <aside className="hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:w-[var(--sidebar-width)] border-r border-[var(--sidebar-border)] bg-[var(--sidebar-bg)]">
+    <aside
+      className="hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 border-r border-[var(--sidebar-border)] bg-[var(--sidebar-bg)]"
+      style={{ width: "var(--sidebar-current, var(--sidebar-width))" }}
+    >
       <div className="flex h-16 items-center gap-3 border-b border-[var(--sidebar-border)] px-3">
         <div className="h-8 w-8 rounded-lg bg-[var(--sidebar-hover)]" />
         <div className="h-9 w-9 rounded-xl bg-[var(--sidebar-hover)]" />

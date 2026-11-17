@@ -51,18 +51,21 @@ export async function GET(request: NextRequest) {
 
   // Filter: geography
   const geographies = list("geography");
-  if (geographies.includes("unmapped")) {
-    filters.push(`NOT EXISTS (
-      SELECT 1 FROM alert_geographies ag WHERE ag.alert_id = a.id AND ag.state != 'rejected'
-    )`);
-  } else if (geographies.length) {
-    filters.push(`EXISTS (
+  if (geographies.length) {
+    const countryLinks = `
       SELECT 1 FROM alert_geographies ag
-      JOIN geographies g ON g.id = ag.geography_id
-      WHERE ag.alert_id = a.id AND g.code = ANY($${paramIdx}::text[]) AND ag.state != 'rejected'
-    )`);
-    params.push(geographies);
-    paramIdx++;
+      JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
+      WHERE ag.alert_id = a.id AND ag.company_id = a.company_id AND ag.state <> 'rejected'`;
+    const geographyFilters: string[] = [];
+    if (geographies.includes("unmapped")) geographyFilters.push(`NOT EXISTS (${countryLinks})`);
+
+    const countryCodes = geographies.filter((code) => code !== "unmapped");
+    if (countryCodes.length) {
+      geographyFilters.push(`EXISTS (${countryLinks} AND g.code = ANY($${paramIdx}::text[]))`);
+      params.push(countryCodes);
+      paramIdx++;
+    }
+    filters.push(`(${geographyFilters.join(" OR ")})`);
   }
 
   // Filter: group
@@ -212,18 +215,19 @@ export async function GET(request: NextRequest) {
     [...params, perPage, offset]
   );
 
-  // Fetch geographies for displayed alerts
+  // Fetch mapped countries for displayed alerts
   const alertIds = alertsResult.rows.map((r: { id: string }) => r.id);
   const geoMap: Record<string, string[]> = {};
   const productMap: Record<string, string[]> = {};
 
   if (alertIds.length > 0) {
     const geoResult = await query(
-      `SELECT ag.alert_id, g.display_name, g.code
+      `SELECT ag.alert_id, g.display_name
        FROM alert_geographies ag
-       JOIN geographies g ON g.id = ag.geography_id
-       WHERE ag.alert_id = ANY($1) AND ag.state != 'rejected'`,
-      [alertIds]
+       JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
+       WHERE ag.alert_id = ANY($1) AND ag.company_id = $2 AND ag.state <> 'rejected'
+       ORDER BY g.display_name`,
+      [alertIds, companyId]
     );
     for (const row of geoResult.rows) {
       if (!geoMap[row.alert_id]) geoMap[row.alert_id] = [];

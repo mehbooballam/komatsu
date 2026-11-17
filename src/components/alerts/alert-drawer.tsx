@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  X, ExternalLink, Clock, ChevronDown, User, Tag, FileText, AlertTriangle, Loader2,
+  X, ExternalLink, Clock, ChevronDown, Tag, FileText, AlertTriangle, Loader2,
   SlidersHorizontal, Link2, Package, FolderPlus, Check, UserPlus, UserMinus,
   CalendarCheck, Globe2, History, CheckCircle2, FolderMinus,
 } from "lucide-react";
@@ -12,6 +12,7 @@ import { useSessionInfo } from "@/components/layout/session-context";
 import { StageBadge, GroupPicker, createGroup, type Group } from "@/components/alerts/alerts-table";
 import { DeadlineDialog } from "@/components/alerts/deadline-dialog";
 import { AlertNotes } from "@/components/alerts/alert-notes";
+import { AlertCountryMapping } from "@/components/alerts/alert-country-mapping";
 import { describeEvent, type Refs } from "@/lib/audit-describe";
 import { Sentence, ChangeList, lowerFirst } from "@/components/audit/audit-entry";
 import { ProductPicker, ProductChip, setAlertProduct, type AttachedProduct, type ProductRef } from "@/components/products/product-picker";
@@ -80,7 +81,7 @@ interface AlertDetail {
   products: AttachedProduct[];
   /** Notes the viewer can see (team notes + their own private ones) */
   notes_count?: number;
-  geographies: Array<{ display_name: string; code: string; state: string }>;
+  geographies: Array<{ display_name: string; code: string; level: string; state: string; source_evidence: string | null }>;
   topics: Array<{ normalized_key: string; source_label: string }>;
   tags: Array<{ tag_name: string; color: string }>;
   forecast: { remaining_days: number; estimated_finish_date: string; as_of_date: string; reason: string } | null;
@@ -152,7 +153,7 @@ interface AlertDrawerProps {
   alertId: string | null;
   onClose: () => void;
   userRole?: string;
-  /** Called after any change (owner, group, score, deadline) so lists can refresh. */
+  /** Called after a change so lists and dashboard summaries can refresh. */
   onChanged?: () => void;
   /** Render inline (full page) instead of as a slide-over. */
   inline?: boolean;
@@ -233,7 +234,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
   // Close on Escape
   useEffect(() => {
     if (inline || !alertId) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !scoreOpen && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !e.defaultPrevented && !scoreOpen && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [inline, alertId, scoreOpen, onClose]);
@@ -350,6 +351,8 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
   const nextDeadline = [...outstanding].sort((a, b) => a.date_value.localeCompare(b.date_value))[0];
   const ownerId = data?.alert.ownership.direct_owner_id ?? null;
   const totalOverride = data?.active_overrides.find((o) => o.target === "total") ?? null;
+  const mappedCountries = data?.geographies.filter((g) => g.level === "country" && g.state !== "rejected") ?? [];
+  const hasManualMapping = mappedCountries.some((g) => g.state === "confirmed" && g.source_evidence === "manual");
 
   const scoreFactors = Object.fromEntries(
     FACTORS.map((f) => {
@@ -657,6 +660,18 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                     ))}
                   </div>
                 )}
+                {(data.topics.length > 0 || data.tags.length > 0) && (
+                  <Section title="Topics" icon={Tag}>
+                    <div className="flex flex-wrap gap-1.5">
+                      {data.tags.map((t, i) => (
+                        <span key={`t${i}`} className="rounded-full border px-2.5 py-1 text-xs font-medium" style={{ borderColor: t.color, color: t.color }}>{t.tag_name}</span>
+                      ))}
+                      {data.topics.map((t, i) => (
+                        <span key={`p${i}`} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">{t.source_label || t.normalized_key}</span>
+                      ))}
+                    </div>
+                  </Section>
+                )}
                 {(data.alert.overview || data.alert.summary) && (
                   <Section title="Summary" icon={FileText}>
                     {data.alert.overview && <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{data.alert.overview}</p>}
@@ -667,14 +682,40 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                 )}
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Section title="Geography" icon={Globe2}>
+                    {data.alert.jurisdiction_raw && (mappedCountries.length === 0 || hasManualMapping) && (
+                      <p className="mb-2 text-xs text-[var(--muted-foreground)]">
+                        <span className="font-medium">Imported jurisdiction:</span> {data.alert.jurisdiction_raw}
+                      </p>
+                    )}
                     <div className="flex flex-wrap gap-1.5">
-                      {data.geographies.map((g, i) => (
-                        <span key={i} className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">{g.display_name}</span>
+                      {mappedCountries.map((g) => (
+                        <span key={g.code} className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">{g.display_name}</span>
                       ))}
-                      {data.geographies.length === 0 && <span className="text-sm text-slate-500">{data.alert.jurisdiction_raw || "—"} <span className="text-xs text-slate-400">(not a country)</span></span>}
+                      {mappedCountries.length === 0 && <span className="text-sm text-slate-500">No country mapped.</span>}
                     </div>
+                    {session && canEdit && (mappedCountries.length === 0 || hasManualMapping) && (
+                      <div className="mt-2">
+                        <AlertCountryMapping
+                          alertId={data.alert.id}
+                          alertTitle={data.alert.title}
+                          jurisdiction={data.alert.jurisdiction_raw}
+                          editing={hasManualMapping}
+                          onSaved={(text) => {
+                            void load();
+                            setHistory(null);
+                            setFlash({ ok: true, text });
+                            onChanged?.();
+                          }}
+                        />
+                      </div>
+                    )}
                   </Section>
                   <Section title="Products" icon={Package}>
+                    {data.alert.product_raw && (
+                      <p className="mb-3 break-words text-sm font-semibold text-slate-700 dark:text-slate-200">
+                        From the import file: <strong className="text-slate-950 dark:text-white">{data.alert.product_raw}</strong>
+                      </p>
+                    )}
                     <div className="flex flex-wrap items-center gap-1.5">
                       {data.products.map((p) => (
                         <ProductChip
@@ -696,37 +737,8 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                         </button>
                       )}
                     </div>
-                    {data.alert.product_raw && (
-                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        From the import file: <span className="text-slate-700 dark:text-slate-300">{data.alert.product_raw}</span>
-                      </p>
-                    )}
                   </Section>
                 </div>
-                {(data.topics.length > 0 || data.tags.length > 0) && (
-                  <Section title="Topics" icon={Tag}>
-                    <div className="flex flex-wrap gap-1.5">
-                      {data.tags.map((t, i) => (
-                        <span key={`t${i}`} className="rounded-full border px-2.5 py-1 text-xs font-medium" style={{ borderColor: t.color, color: t.color }}>{t.tag_name}</span>
-                      ))}
-                      {data.topics.map((t, i) => (
-                        <span key={`p${i}`} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">{t.source_label || t.normalized_key}</span>
-                      ))}
-                    </div>
-                  </Section>
-                )}
-                <Section title="Ownership" icon={User}>
-                  <div className="text-sm">
-                    {data.alert.ownership.effective_owner_name ? (
-                      <span className="font-medium text-slate-900 dark:text-white">{data.alert.ownership.effective_owner_name}</span>
-                    ) : (
-                      <span className="text-slate-500">Unassigned</span>
-                    )}
-                    {data.alert.ownership.type && data.alert.ownership.effective_owner_name && (
-                      <span className="ml-2 text-xs capitalize text-slate-400">({data.alert.ownership.type})</span>
-                    )}
-                  </div>
-                </Section>
               </>
             )}
 
