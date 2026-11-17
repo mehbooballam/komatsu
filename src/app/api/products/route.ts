@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
+import { matchImportedProducts, unmatchedProductLabels } from "@/lib/import/product-matching";
 
 /**
  * The product inventory: families with their models, plus how many alerts and
@@ -33,7 +34,9 @@ export async function GET() {
     [auth.company_id]
   );
 
-  return NextResponse.json({ families: families.rows });
+  // Product names used in imported alerts that the inventory doesn't have yet
+  const unmatched = await unmatchedProductLabels(auth.company_id);
+  return NextResponse.json({ families: families.rows, unmatched });
 }
 
 /** Create a product family. */
@@ -61,6 +64,8 @@ export async function POST(request: NextRequest) {
   );
 
   await createAuditEvent(auth.company_id, auth.membership_id, "create", "product_family", res.rows[0].id, null, { name });
+  // Alerts whose imported product text names this family get it as a suggestion
+  const matched = await matchImportedProducts(auth.company_id);
 
-  return NextResponse.json({ family: res.rows[0] }, { status: 201 });
+  return NextResponse.json({ family: res.rows[0], matched }, { status: 201 });
 }

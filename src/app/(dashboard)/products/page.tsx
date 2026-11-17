@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Plus, Search, ChevronRight, MoreHorizontal, Pencil, Trash2, Archive, ArchiveRestore, Boxes, Package, Loader2, X, Bell, Layers,
+  Plus, Search, ChevronRight, MoreHorizontal, Pencil, Trash2, Archive, ArchiveRestore, Boxes, Package, Loader2, X, Bell, Layers, AlertTriangle,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -54,6 +54,8 @@ export default function ProductsPage() {
   const canDelete = role === "company_admin" || role === "manager";
 
   const [families, setFamilies] = useState<Family[]>([]);
+  // Product names in imported alerts that the inventory does not have yet
+  const [unmatched, setUnmatched] = useState<Array<{ label: string; alerts: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -70,6 +72,7 @@ export default function ProductsPage() {
     const res = await fetch("/api/products");
     const data = res.ok ? await res.json() : { families: [] };
     setFamilies(data.families || []);
+    setUnmatched(data.unmatched || []);
     setLoading(false);
   }, []);
 
@@ -80,6 +83,7 @@ export default function ProductsPage() {
       .then((d) => {
         if (cancelled) return;
         setFamilies(d.families || []);
+        setUnmatched(d.unmatched || []);
         setLoading(false);
       });
     return () => {
@@ -128,9 +132,15 @@ export default function ProductsPage() {
     setFormError(null);
     try {
       const body = { name: familyForm.name, description: familyForm.description };
+      let linked = 0;
       if (familyForm.id) await call(`/api/products/${familyForm.id}`, "PUT", body);
-      else await call("/api/products", "POST", body);
-      setFlash({ ok: true, text: familyForm.id ? "Family saved" : `Added “${familyForm.name.trim()}”` });
+      else linked = (await call("/api/products", "POST", body))?.matched?.linked ?? 0;
+      setFlash({
+        ok: true,
+        text: familyForm.id
+          ? "Family saved"
+          : `Added “${familyForm.name.trim()}”${linked ? ` and suggested it on ${linked} imported alert${linked === 1 ? "" : "s"}` : ""}`,
+      });
       setFamilyForm(null);
       await load();
     } catch (err) {
@@ -185,9 +195,9 @@ export default function ProductsPage() {
       return n;
     });
 
-  const openFamily = (f?: Family) => {
+  const openFamily = (f?: Family, presetName = "") => {
     setFormError(null);
-    setFamilyForm(f ? { id: f.id, name: f.name, description: f.description || "" } : { name: "", description: "" });
+    setFamilyForm(f ? { id: f.id, name: f.name, description: f.description || "" } : { name: presetName, description: "" });
   };
   const openModel = (f: Family, m?: Model) => {
     setFormError(null);
@@ -221,6 +231,38 @@ export default function ProductsPage() {
           </button>
         )}
       </div>
+
+      {unmatched.length > 0 && (
+        <section className="panel border-amber-200 bg-amber-50/60 p-4 dark:border-amber-500/30 dark:bg-amber-500/5">
+          <div className="flex items-start gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
+              <AlertTriangle className="h-4 w-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Products in imported alerts that aren&apos;t in the inventory</h2>
+              <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
+                These alerts were left untagged. Create the family (alerts are then linked automatically as suggestions), or tag the alerts yourself from the Alerts page.
+              </p>
+              <ul className="mt-3 flex flex-wrap gap-2">
+                {unmatched.map((u) => (
+                  <li key={u.label} className="inline-flex items-center gap-2 rounded-lg bg-white px-2.5 py-1.5 text-sm ring-1 ring-amber-200 dark:bg-slate-900 dark:ring-amber-500/30">
+                    <span className="font-medium text-slate-800 dark:text-slate-100">{u.label}</span>
+                    <span className="text-xs text-slate-500">{u.alerts} alert{u.alerts === 1 ? "" : "s"}</span>
+                    {canEdit && (
+                      <button
+                        onClick={() => openFamily(undefined, u.label)}
+                        className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2 py-0.5 text-xs font-semibold text-white hover:bg-blue-700"
+                      >
+                        <Plus className="h-3 w-3" /> Create family
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </section>
+      )}
 
       {flash && (
         <div className={`rounded-lg px-4 py-2.5 text-sm ${flash.ok ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300" : "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300"}`}>

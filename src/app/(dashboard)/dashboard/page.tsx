@@ -12,8 +12,9 @@ import { useSessionInfo } from "@/components/layout/session-context";
 import {
   AlertTriangle, Clock, FileWarning, Layers, Loader2, Upload, ArrowRight,
   Globe2, TrendingUp, RefreshCw, CalendarDays, Flame, ListChecks, CheckCircle2,
-  ChevronRight, UserPlus, Tag,
+  ChevronRight, UserPlus, Tag, Info,
 } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type Band = "critical" | "high" | "moderate" | "low" | "unscored";
 
@@ -26,6 +27,7 @@ interface SummaryData {
   escalated_count?: number;
   due_soon_count: number;
   needs_review_count: number;
+  assigned_count?: number;
   last_import_date: string | null;
   as_of_date: string;
 }
@@ -142,6 +144,115 @@ function formatDate(d: string | null | undefined) {
 }
 
 /* ---------- Building blocks ---------- */
+
+/**
+ * Explains how the risk concentration (Pareto) chart is calculated,
+ * with a worked example from the live data.
+ */
+function ConcentrationInfo({ data }: { data: ParetoData | null }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="How risk concentration is calculated"
+          title="How it’s calculated"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800 dark:hover:text-blue-400"
+        >
+          <Info className="h-[18px] w-[18px]" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[min(560px,calc(100vw-2rem))] p-0">
+        {data ? <ConcentrationFormula data={data} /> : <p className="p-4 text-sm text-slate-500">Loading…</p>}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ConcentrationFormula({ data }: { data: ParetoData }) {
+  const rows = data.data;
+  if (!rows.length || data.total_sum <= 0) {
+    return <p className="p-4 text-sm text-slate-500">No scored alerts yet — the chart fills in once alerts have a risk score.</p>;
+  }
+  const total = data.total_sum;
+  const fmt = (n: number) => n.toLocaleString();
+  const pct = (n: number) => `${(Math.round((n / total) * 1000) / 10).toLocaleString()}%`;
+
+  // Worked example: the top 3 (or fewer) alerts
+  const n = Math.min(3, rows.length);
+  const top = rows.slice(0, n);
+  const topSum = top.reduce((s, r) => s + (r.score || 0), 0);
+
+  // How many alerts carry 80% of the total risk (only answerable if the chart reaches 80%)
+  const idx80 = rows.findIndex((r) => r.cumulative_pct >= 80);
+  const share = idx80 >= 0 ? Math.round(((idx80 + 1) / data.total_scored_count) * 100) : null;
+
+  return (
+    <div className="max-h-[70vh] overflow-y-auto p-4 text-sm">
+      <p className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white">
+        <Info className="h-4 w-4 text-blue-600 dark:text-blue-400" /> How risk concentration is calculated
+      </p>
+
+      <ol className="mt-2 list-decimal space-y-1 pl-5 text-slate-600 dark:text-slate-300">
+        <li>
+          Each <strong className="text-slate-800 dark:text-slate-100">bar</strong> is one alert’s final risk score:{" "}
+          <span className="whitespace-nowrap font-mono text-[12px] text-slate-800 dark:text-slate-200">Market access × Cost × Urgency</span>{" "}
+          (1–729, including any manual adjustment). Alerts are sorted from highest to lowest.
+        </li>
+        <li>
+          The <strong className="text-slate-800 dark:text-slate-100">line</strong> is the running share of all risk:
+        </li>
+      </ol>
+      <div className="mt-2 overflow-x-auto rounded-lg bg-white px-3 py-2.5 text-center font-mono text-[13px] text-slate-800 ring-1 ring-slate-200 dark:bg-slate-950 dark:text-slate-100 dark:ring-slate-700">
+        Cumulative share at rank <i>n</i> = (sum of scores of alerts 1…<i>n</i>) ÷ (sum of all scores) × 100%
+      </div>
+      <p className="mt-2 text-slate-600 dark:text-slate-300">
+        Sum of all scores = <strong className="text-slate-800 dark:text-slate-100">{fmt(total)}</strong> across{" "}
+        {fmt(data.total_scored_count)} scored alerts.
+        {idx80 >= 0 && share !== null && (
+          <>
+            {" "}The top <strong className="text-slate-800 dark:text-slate-100">{fmt(idx80 + 1)}</strong> alert{idx80 === 0 ? "" : "s"} ({share}% of alerts) carry{" "}
+            <strong className="text-slate-800 dark:text-slate-100">80%</strong> of the total risk — focus there first.
+          </>
+        )}
+      </p>
+
+      <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Worked example</p>
+      <div className="mt-1 overflow-x-auto">
+          <table className="w-full min-w-[420px] text-left text-[13px]">
+            <thead>
+              <tr className="text-[11px] uppercase tracking-wide text-slate-500">
+                <th className="py-1 pr-3 font-semibold">Rank</th>
+                <th className="py-1 pr-3 font-semibold">Alert</th>
+                <th className="py-1 pr-3 text-right font-semibold">Score</th>
+                <th className="py-1 pr-3 text-right font-semibold">Running total</th>
+                <th className="py-1 text-right font-semibold">Cumulative share</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+              {top.map((r, i) => {
+                const running = top.slice(0, i + 1).reduce((s, x) => s + (x.score || 0), 0);
+                return (
+                  <tr key={r.alert_id} className="text-slate-700 dark:text-slate-300">
+                    <td className="py-1.5 pr-3 tabular-nums">{i + 1}</td>
+                    <td className="max-w-[170px] truncate py-1.5 pr-3" title={r.title}>{r.title}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{fmt(r.score)}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{fmt(running)}</td>
+                    <td className="whitespace-nowrap py-1.5 text-right font-mono tabular-nums">
+                      {fmt(running)} ÷ {fmt(total)} = <strong className="text-slate-900 dark:text-white">{pct(running)}</strong>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="mt-2 text-xs text-slate-500">
+            So the top {n} alert{n === 1 ? "" : "s"} account for {pct(topSum)} of all risk in this workspace.
+          </p>
+      </div>
+    </div>
+  );
+}
 
 function Panel({
   title,
@@ -526,23 +637,28 @@ export default function DashboardPage() {
               loading={loading}
               onClick={() => router.push("/alerts?priority=critical")}
             />
+            {/* Deadlines and review counts live in "Actions required" below, so these show other figures */}
             <KpiCard
-              title="Due within 30 days"
-              value={summary?.due_soon_count ?? 0}
-              hint="Upcoming compliance deadlines"
-              icon={Clock}
+              title="Assigned"
+              value={summary?.assigned_count ?? 0}
+              hint={
+                total
+                  ? `${Math.round(((summary?.assigned_count ?? 0) / total) * 100)}% of alerts have an owner · ${total - (summary?.assigned_count ?? 0)} unassigned`
+                  : undefined
+              }
+              icon={UserPlus}
               tone="violet"
               loading={loading}
-              onClick={() => router.push("/alerts?deadline_within=30")}
+              onClick={() => router.push("/alerts?owner_id=unassigned")}
             />
             <KpiCard
-              title="Needs review"
-              value={summary?.needs_review_count ?? 0}
-              hint="Missing or incomplete scores"
-              icon={AlertTriangle}
+              title="Countries affected"
+              value={mapData?.countries.length ?? 0}
+              hint={mapData?.unmapped_count ? `${mapData.unmapped_count} alerts without a mapped country` : "Every alert is mapped to a country"}
+              icon={Globe2}
               tone="amber"
               loading={loading}
-              onClick={() => router.push("/alerts?needs_review=true")}
+              onClick={() => document.getElementById("risk-map")?.scrollIntoView({ behavior: "smooth", block: "start" })}
             />
           </div>
 
@@ -595,7 +711,7 @@ export default function DashboardPage() {
 
           {/* Map + priority mix */}
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-            <section className="panel p-5 xl:col-span-2">
+            <section id="risk-map" className="panel scroll-mt-20 p-5 xl:col-span-2">
               {loading || !mapData ? (
                 <div className="flex h-80 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
               ) : (
@@ -649,17 +765,20 @@ export default function DashboardPage() {
                   : undefined
               }
               icon={Layers}
+              action={<ConcentrationInfo data={paretoData} />}
             >
               {loading || !paretoData ? (
                 <div className="flex h-72 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
               ) : (
-                <ParetoChart
-                  data={paretoData.data}
-                  totalSum={paretoData.total_sum}
-                  totalScoredCount={paretoData.total_scored_count}
-                  displayedCount={paretoData.displayed_count}
-                  onBarClick={(id) => router.push(`/alerts/${id}`)}
-                />
+                <>
+                  <ParetoChart
+                    data={paretoData.data}
+                    totalSum={paretoData.total_sum}
+                    totalScoredCount={paretoData.total_scored_count}
+                    displayedCount={paretoData.displayed_count}
+                    onBarClick={(id) => router.push(`/alerts/${id}`)}
+                  />
+                </>
               )}
             </Panel>
             <Panel

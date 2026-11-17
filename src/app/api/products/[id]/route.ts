@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
 import { UUID_RE, canDeleteInventory, deleteInventory } from "@/lib/inventory";
+import { matchImportedProducts } from "@/lib/import/product-matching";
 
 async function findFamily(companyId: string, id: string) {
   if (!UUID_RE.test(id)) return null;
@@ -55,7 +56,8 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       [auth.company_id, id, modelCode || null, name, description || null]
     );
     await createAuditEvent(auth.company_id, auth.membership_id, "create", "product", res.rows[0].id, null, { name, family_id: id });
-    return NextResponse.json({ product: res.rows[0] }, { status: 201 });
+    const matched = await matchImportedProducts(auth.company_id);
+    return NextResponse.json({ product: res.rows[0], matched }, { status: 201 });
   }
 
   const name = typeof body.name === "string" ? body.name.trim() : undefined;
@@ -82,6 +84,8 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   await createAuditEvent(auth.company_id, auth.membership_id, "update", "product_family", id,
     { name: family.name, description: family.description, state: family.state },
     { name: res.rows[0].name, description: res.rows[0].description, state: res.rows[0].state });
+  // A new name or archive/restore changes which imported alerts this family matches
+  if (name !== undefined || state !== undefined) await matchImportedProducts(auth.company_id);
   return NextResponse.json({ family: res.rows[0] });
 }
 

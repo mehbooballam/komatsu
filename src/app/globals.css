@@ -3,26 +3,58 @@
 /* Dark mode is opt-in via the theme toggle (html[data-theme=dark]); it no longer follows the OS setting. */
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
+/*
+ * RiskOrbit brand: deep green #0a3b2f with gold #e2ad5a.
+ * Tailwind's blue scale is remapped to the brand green so every primary button,
+ * link and highlight across the app follows the brand. Priority colours are unchanged.
+ */
+@theme {
+  --color-blue-50: #eef7f3;
+  --color-blue-100: #d5ece3;
+  --color-blue-200: #acd8c8;
+  --color-blue-300: #7cc0a9;
+  --color-blue-400: #45a085;
+  --color-blue-500: #1e8065;
+  --color-blue-600: #0f6450;
+  --color-blue-700: #0b4d3e;
+  --color-blue-800: #0a3b2f;
+  --color-blue-900: #082f26;
+  --color-blue-950: #041a15;
+
+  /* Darkest greys get a slight brand-green tint (used for dark-mode surfaces) */
+  --color-slate-800: #1b2a27;
+  --color-slate-900: #0f1c19;
+  --color-slate-950: #08110f;
+
+  --color-brand: #0a3b2f;
+  --color-gold-50: #fdf7ec;
+  --color-gold-100: #f9e9cc;
+  --color-gold-300: #eec98d;
+  --color-gold-400: #e2ad5a;
+  --color-gold-500: #d4953a;
+  --color-gold-600: #b5772a;
+}
+
 :root {
-  --background: #f4f6fb;
+  --background: #f5f7f6;
   --foreground: #0f172a;
   --card: #ffffff;
   --card-foreground: #0f172a;
   --popover: #ffffff;
   --popover-foreground: #0f172a;
-  --primary: #1d4ed8;
+  --primary: #0f6450;
   --primary-foreground: #ffffff;
-  --secondary: #eef2f9;
+  --secondary: #eef3f1;
   --secondary-foreground: #0f172a;
-  --muted: #eef2f9;
-  --muted-foreground: #5b6b82;
-  --accent: #eef2f9;
+  --muted: #eef3f1;
+  --muted-foreground: #5b6b74;
+  --accent: #eef3f1;
   --accent-foreground: #0f172a;
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
-  --border: #e3e8f0;
-  --input: #d8dfea;
-  --ring: #2563eb;
+  --border: #e2e8e5;
+  --input: #d5ddd9;
+  --ring: #0f6450;
   --radius: 0.75rem;
 
   --priority-critical: #7c3aed;
@@ -36,16 +68,17 @@
   --priority-unscored: #6b7280;
   --priority-unscored-bg: #f1f3f6;
 
-  /* Sidebar follows the theme: white in light mode, deep navy in dark mode */
+  /* Sidebar follows the theme: white in light mode, deep brand green in dark mode */
   --sidebar-bg: #ffffff;
   --sidebar-fg: #475569;
   --sidebar-muted: #94a3b8;
   --sidebar-strong: #0f172a;
-  --sidebar-accent: #2563eb;
-  --sidebar-hover: rgba(15, 23, 42, 0.05);
-  --sidebar-active-bg: #eef3ff;
-  --sidebar-active-fg: #1d4ed8;
-  --sidebar-border: #e3e8f0;
+  --sidebar-accent: #0f6450;
+  --sidebar-gold: #e2ad5a;
+  --sidebar-hover: rgba(10, 59, 47, 0.05);
+  --sidebar-active-bg: #eef7f3;
+  --sidebar-active-fg: #0a3b2f;
+  --sidebar-border: #e2e8e5;
   --sidebar-track: #cbd5e1;
 
   --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 20px -8px rgba(15, 23, 42, 0.1);
@@ -55,25 +88,25 @@
 }
 
 :root[data-theme="dark"] {
-  --background: #0b1220;
-  --foreground: #e8edf6;
-  --card: #121b2e;
-  --card-foreground: #e8edf6;
-  --popover: #121b2e;
-  --popover-foreground: #e8edf6;
-  --primary: #4f86ff;
+  --background: #0a1412;
+  --foreground: #e7efec;
+  --card: #111d1a;
+  --card-foreground: #e7efec;
+  --popover: #111d1a;
+  --popover-foreground: #e7efec;
+  --primary: #45a085;
   --primary-foreground: #ffffff;
-  --secondary: #1c2740;
-  --secondary-foreground: #e8edf6;
-  --muted: #1c2740;
-  --muted-foreground: #93a3bd;
-  --accent: #1c2740;
-  --accent-foreground: #e8edf6;
+  --secondary: #1a2a26;
+  --secondary-foreground: #e7efec;
+  --muted: #1a2a26;
+  --muted-foreground: #93a7a0;
+  --accent: #1a2a26;
+  --accent-foreground: #e7efec;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
-  --border: #22304a;
-  --input: #2a3956;
-  --ring: #4f86ff;
+  --border: #20322d;
+  --input: #2a3f39;
+  --ring: #45a085;
 
   --priority-critical-bg: #2a1a4f;
   --priority-high-bg: #3a1a0c;
@@ -81,11 +114,12 @@
   --priority-low-bg: #0b2f2c;
   --priority-unscored-bg: #1c2433;
 
-  --sidebar-bg: #0a1630;
-  --sidebar-fg: #c9d4e8;
-  --sidebar-muted: #8396b6;
+  --sidebar-bg: #0a2a22;
+  --sidebar-fg: #c8d8d2;
+  --sidebar-muted: #86a39a;
   --sidebar-strong: #ffffff;
-  --sidebar-accent: #7dd3fc;
+  --sidebar-accent: #7cc0a9;
+  --sidebar-gold: #e2ad5a;
   --sidebar-hover: rgba(255, 255, 255, 0.06);
   --sidebar-active-bg: rgba(255, 255, 255, 0.1);
   --sidebar-active-fg: #ffffff;

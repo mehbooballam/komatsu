@@ -41,10 +41,13 @@ export async function GET() {
         COUNT(*) FILTER (WHERE p.is_active AND p.effective_priority = 'moderate') AS moderate_count,
         COUNT(*) FILTER (WHERE p.is_active AND p.effective_priority = 'low') AS low_count,
         COUNT(*) FILTER (WHERE p.is_active AND (p.effective_priority IS NULL OR p.effective_priority = 'unscored')) AS unscored_count,
-        COUNT(*) FILTER (WHERE p.is_active AND p.next_compliance_deadline IS NOT NULL
+        COUNT(*) FILTER (WHERE p.is_active AND p.next_compliance_deadline >= ${asOfExpr}
           AND p.next_compliance_deadline <= (${asOfExpr} + INTERVAL '30 days')) AS due_soon_count,
+        COUNT(*) FILTER (WHERE p.is_active AND COALESCE(a.direct_owner_membership_id, rg.owner_membership_id) IS NOT NULL) AS assigned_count,
         COUNT(*) FILTER (WHERE p.is_active AND (p.effective_total IS NULL OR p.latest_assessment_id IS NULL)) AS needs_review_count
        FROM alert_active_projections p
+       JOIN alerts a ON a.id = p.alert_id
+       LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id
        WHERE p.company_id = $1`,
       [companyId]
     ),
@@ -85,6 +88,8 @@ export async function GET() {
     },
     due_soon_count: parseInt(row.due_soon_count) || 0,
     needs_review_count: parseInt(row.needs_review_count) || 0,
+    // Alerts with an owner (directly or through their group)
+    assigned_count: parseInt(row.assigned_count) || 0,
     last_import_date: lastImport.rows[0]?.last_import_date || null,
     as_of_date: frozenDate || new Date().toISOString().slice(0, 10),
   });

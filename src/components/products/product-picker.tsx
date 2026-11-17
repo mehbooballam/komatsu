@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronRight, Loader2, Package, Boxes } from "lucide-react";
+import { Check, ChevronRight, Loader2, Package, Boxes, Layers } from "lucide-react";
 
 export interface InventoryProduct { id: string; name: string; model_code: string | null; is_active: boolean }
 export interface InventoryFamily { id: string; name: string; state: string; products: InventoryProduct[] | null }
@@ -126,7 +126,7 @@ export function ProductPicker({
         type="button"
         onClick={() => toggle(r)}
         disabled={!!via || busy !== null || (attachOnly && on)}
-        title={via ? `Inherited from group ${via}` : undefined}
+        title={via ? `Assigned automatically by group ${via} — change it on the group` : undefined}
         className={`flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-2 text-left text-sm hover:bg-slate-100 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-slate-800 ${indent ? "pl-9" : "pl-2"}`}
       >
         <span
@@ -142,7 +142,7 @@ export function ProductPicker({
         </span>
         <span className="min-w-0 flex-1">
           <span className={`block truncate ${indent ? "" : "font-medium"}`}>{label}</span>
-          {(sub || via) && <span className="block truncate text-[11px] text-slate-500">{via ? `via ${via}` : sub}</span>}
+          {(sub || via) && <span className="block truncate text-[11px] text-slate-500">{via ? `Assigned by group ${via}` : sub}</span>}
         </span>
       </button>
     );
@@ -271,12 +271,14 @@ export function ProductChip({
   onRemove?: () => void;
 }) {
   const inheritedFrom = product.source === "group" ? product.group_path?.join(" › ") : null;
+  // The group it comes from (the group the product is assigned to, which may be a parent group)
+  const groupName = product.source === "group" ? product.group_path?.[product.group_path.length - 1] : null;
   const suggested = product.state === "suggested";
   return (
     <span
       title={
         inheritedFrom
-          ? `From group ${inheritedFrom}`
+          ? `Assigned automatically from group ${inheritedFrom}. To remove it, remove it from the group.`
           : suggested
           ? "Suggested by the import — attach it to confirm"
           : product.family_name && product.kind === "product"
@@ -284,24 +286,26 @@ export function ProductChip({
           : "Whole product family"
       }
       className={`inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${
-        inheritedFrom
-          ? "bg-slate-50 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700"
-          : suggested
+        suggested
           ? "border border-dashed border-emerald-400 bg-white text-emerald-700 ring-transparent dark:bg-transparent dark:text-emerald-300"
           : "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30"
       }`}
     >
       {product.kind === "family" ? <Boxes className="h-3 w-3 shrink-0" /> : <Package className="h-3 w-3 shrink-0" />}
-      <span className="truncate">{product.name}</span>
-      {product.kind === "product" && product.model_code && <span className="opacity-60">{product.model_code}</span>}
-      {inheritedFrom && <span className="truncate opacity-60">· via group</span>}
-      {suggested && <span className="opacity-60">· suggested</span>}
+      <span className="min-w-0 truncate">{product.name}</span>
+      {product.kind === "product" && product.model_code && <span className="shrink-0 whitespace-nowrap opacity-60">{product.model_code}</span>}
+      {groupName && (
+        <span className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-full bg-indigo-100 px-1.5 py-px text-[10px] font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
+          <Layers className="h-2.5 w-2.5" /> {groupName}
+        </span>
+      )}
+      {suggested && <span className="shrink-0 whitespace-nowrap opacity-60">· suggested</span>}
       {onRemove && (
         <button
           type="button"
           onClick={onRemove}
           aria-label={`Remove ${product.name}`}
-          className="-mr-1 ml-0.5 rounded-full p-0.5 hover:bg-black/5 dark:hover:bg-white/10"
+          className="-mr-1 ml-0.5 shrink-0 rounded-full p-0.5 hover:bg-black/5 dark:hover:bg-white/10"
         >
           <span aria-hidden className="block h-3 w-3 text-center leading-3">×</span>
         </button>

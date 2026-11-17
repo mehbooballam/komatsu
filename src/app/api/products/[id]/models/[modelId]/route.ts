@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
 import { UUID_RE, canDeleteInventory, deleteInventory } from "@/lib/inventory";
+import { matchImportedProducts } from "@/lib/import/product-matching";
 
 type Params = { params: Promise<{ id: string; modelId: string }> };
 
@@ -55,6 +56,7 @@ export async function PUT(request: NextRequest, { params }: Params) {
   await createAuditEvent(auth.company_id, auth.membership_id, "update", "product", modelId,
     { name: model.name, model_code: model.model_code, is_active: model.is_active, family_id: model.family_id },
     { name: res.rows[0].name, model_code: res.rows[0].model_code, is_active: res.rows[0].is_active, family_id: res.rows[0].family_id });
+  if (name !== undefined || modelCode !== undefined || isActive !== undefined) await matchImportedProducts(auth.company_id);
   return NextResponse.json({ product: res.rows[0] });
 }
 

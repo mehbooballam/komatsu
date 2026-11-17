@@ -116,7 +116,16 @@ export async function alertProducts(
     query(`SELECT id, primary_group_id FROM alerts WHERE company_id = $1 AND id = ANY($2::uuid[])`, [companyId, alertIds]),
   ]);
 
-  for (const r of direct.rows) {
+  /*
+   * Precedence when the same product comes from several places:
+   *   1. attached to the alert by a person (confirmed)
+   *   2. assigned to the alert's group or a parent group — automatically applies to every alert in it
+   *   3. suggested by the import file (only shown when nothing above covers it)
+   */
+  const confirmed = direct.rows.filter((r) => r.state === "confirmed");
+  const suggested = direct.rows.filter((r) => r.state !== "confirmed");
+
+  for (const r of confirmed) {
     const list = out.get(r.alert_id)!;
     const p = toProduct(r);
     if (list.some((x) => x.key === p.key)) continue;
@@ -137,6 +146,13 @@ export async function alertProducts(
         }
       }
     }
+  }
+
+  for (const r of suggested) {
+    const list = out.get(r.alert_id)!;
+    const p = toProduct(r);
+    if (list.some((x) => x.key === p.key)) continue;
+    list.push({ ...p, source: "alert", state: r.state, origin: r.origin });
   }
   return out;
 }

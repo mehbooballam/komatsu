@@ -87,10 +87,13 @@ function WorkspaceSwitcher({
   current,
   companies,
   canCreate,
+  compact = false,
 }: {
   current: { name: string; slug: string; settings?: Branding };
   companies: Array<{ id: string; name: string; slug: string; role?: string; icon?: string | null }>;
   canCreate: boolean;
+  /** Collapsed sidebar: show only the workspace icon */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -130,19 +133,33 @@ function WorkspaceSwitcher({
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setCreating(false); setError(null); } }}>
       <PopoverTrigger asChild>
-        <button className="group flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1.5 py-1 text-left hover:bg-[var(--sidebar-hover)]">
-          <span className="min-w-0 flex-1">
-            {current.settings?.logo || current.settings?.logo_dark ? (
-              <span className="block py-0.5">
-                <WorkspaceLogo logo={current.settings.logo} logoDark={current.settings.logo_dark} name={current.name} className="h-[18px]" />
-              </span>
-            ) : (
-              <span className="block truncate text-sm font-semibold text-[var(--sidebar-strong)]">{current.name}</span>
-            )}
-            <span className="block text-[11px] text-[var(--sidebar-muted)]">Regulatory Risk</span>
-          </span>
-          <ChevronsUpDown className="h-4 w-4 shrink-0 text-[var(--sidebar-muted)] group-hover:text-[var(--sidebar-strong)]" />
-        </button>
+        {compact ? (
+          <button
+            aria-label={`Workspace: ${current.name}. Switch workspace`}
+            title={current.name}
+            className="rounded-lg p-0.5 ring-1 ring-[var(--sidebar-border)] hover:ring-[var(--sidebar-accent)]"
+          >
+            <WorkspaceIcon src={current.settings?.icon} name={current.name} className="h-8 w-8" />
+          </button>
+        ) : (
+          <button
+            aria-label={`Workspace: ${current.name}. Switch workspace`}
+            className="group flex w-full min-w-0 items-center gap-2.5 rounded-xl border border-[var(--sidebar-border)] px-2.5 py-2 text-left transition-colors hover:border-[var(--sidebar-accent)] hover:bg-[var(--sidebar-hover)]"
+          >
+            <WorkspaceIcon src={current.settings?.icon} name={current.name} className="h-8 w-8" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--sidebar-muted)]">Workspace</span>
+              {current.settings?.logo || current.settings?.logo_dark ? (
+                <span className="mt-0.5 block">
+                  <WorkspaceLogo logo={current.settings.logo} logoDark={current.settings.logo_dark} name={current.name} className="h-[15px]" />
+                </span>
+              ) : (
+                <span className="block truncate text-sm font-semibold text-[var(--sidebar-strong)]">{current.name}</span>
+              )}
+            </span>
+            <ChevronsUpDown className="h-4 w-4 shrink-0 text-[var(--sidebar-muted)] group-hover:text-[var(--sidebar-strong)]" />
+          </button>
+        )}
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-72 p-1.5">
         <p className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Workspaces</p>
@@ -158,7 +175,7 @@ function WorkspaceSwitcher({
               {c.icon ? (
                 <WorkspaceIcon src={c.icon} name={c.name} className="h-7 w-7 rounded-lg" />
               ) : (
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-sky-400 to-blue-600 text-[11px] font-bold text-white">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-blue-800 text-[11px] font-bold text-white">
                   {c.name.slice(0, 1).toUpperCase()}
                 </span>
               )}
@@ -225,7 +242,7 @@ export function Sidebar({ user, company, role, companies = [] }: SidebarProps) {
 
   const renderContent = (isCollapsed: boolean, mobile = false) => (
     <div className="flex h-full flex-col text-[var(--sidebar-fg)]">
-      {/* Top: collapse toggle + logo + workspace switcher */}
+      {/* Top: collapse toggle + RiskOrbit brand */}
       <div className={cn("flex items-center gap-2 border-b border-[var(--sidebar-border)] px-3 h-16", isCollapsed && "flex-col justify-center gap-2 h-auto py-3 px-0")}>
         <button
           type="button"
@@ -236,10 +253,20 @@ export function Sidebar({ user, company, role, companies = [] }: SidebarProps) {
         >
           {isCollapsed ? <PanelLeft className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}
         </button>
-        <WorkspaceIcon src={company.settings?.icon} name={company.name} />
-        {!isCollapsed && (
-          <WorkspaceSwitcher current={company} companies={companies} canCreate={role === "company_admin"} />
-        )}
+        {/* Product brand */}
+        <Link href="/dashboard" aria-label="RiskOrbit by Infogenic — home" className="flex min-w-0 flex-1 items-center" onClick={() => setMobileOpen(false)}>
+          {isCollapsed ? (
+            <img src="/brand/riskorbit-mark.png" alt="RiskOrbit" className="h-9 w-9 object-contain" />
+          ) : (
+            <span className="min-w-0">
+              <img src="/brand/riskorbit-logo.png" alt="RiskOrbit" className="h-7 w-auto dark:hidden" />
+              <img src="/brand/riskorbit-logo-dark.png" alt="RiskOrbit" className="hidden h-7 w-auto dark:block" />
+              <span className="mt-0.5 block pl-[2px] text-[10.5px] font-medium tracking-wide text-[var(--sidebar-muted)]">
+                by <span className="font-semibold text-[var(--sidebar-gold)]">Infogenic</span>
+              </span>
+            </span>
+          )}
+        </Link>
         {mobile && (
           <button
             type="button"
@@ -250,6 +277,11 @@ export function Sidebar({ user, company, role, companies = [] }: SidebarProps) {
             <X className="h-5 w-5" />
           </button>
         )}
+      </div>
+
+      {/* Workspace (below the product brand) */}
+      <div className={cn("px-3 pt-3", isCollapsed && "flex justify-center px-0")}>
+        <WorkspaceSwitcher current={company} companies={companies} canCreate={role === "company_admin"} compact={isCollapsed} />
       </div>
 
       {/* Nav */}
@@ -279,7 +311,7 @@ export function Sidebar({ user, company, role, companies = [] }: SidebarProps) {
                     aria-current={isActive ? "page" : undefined}
                     onClick={() => setMobileOpen(false)}
                   >
-                    {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-sky-400" />}
+                    {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-[var(--sidebar-gold)]" />}
                     <item.icon className={cn("h-[18px] w-[18px] shrink-0", isActive ? "text-[var(--sidebar-accent)]" : "text-[var(--sidebar-muted)] group-hover:text-[var(--sidebar-strong)]")} />
                     {!isCollapsed && <span>{item.label}</span>}
                   </Link>
@@ -306,7 +338,7 @@ export function Sidebar({ user, company, role, companies = [] }: SidebarProps) {
           {!isCollapsed && (
             <>
               <span className="flex-1 text-left">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
-              <span className={cn("relative h-4 w-7 rounded-full transition-colors", theme === "dark" ? "bg-sky-500" : "bg-[var(--sidebar-track)]")}>
+              <span className={cn("relative h-4 w-7 rounded-full transition-colors", theme === "dark" ? "bg-blue-500" : "bg-[var(--sidebar-track)]")}>
                 <span className={cn("absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all", theme === "dark" ? "left-3.5" : "left-0.5")} />
               </span>
             </>

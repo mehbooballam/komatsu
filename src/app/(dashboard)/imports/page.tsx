@@ -62,6 +62,7 @@ interface Notice {
   stats?: Array<{ label: string; value: number }>;
   errors?: string[];
   showAlertsLink?: boolean;
+  products?: { linked: number; alerts_matched: number; unmatched: Array<{ label: string; alerts: number }> };
 }
 
 const NOTICE_STYLES: Record<Notice["kind"], string> = {
@@ -94,6 +95,35 @@ function NoticeBanner({ notice, onClose }: { notice: Notice; onClose: () => void
               ))}
               {notice.errors.length > 5 && <li>… and {notice.errors.length - 5} more</li>}
             </ul>
+          )}
+          {notice.products && (notice.products.alerts_matched > 0 || notice.products.unmatched.length > 0) && (
+            <div className="mt-3 rounded-lg bg-white/70 px-3 py-2.5 text-xs dark:bg-slate-900/40">
+              <p className="font-semibold">Products</p>
+              {notice.products.alerts_matched > 0 && (
+                <p className="mt-0.5 opacity-90">
+                  {notice.products.alerts_matched} alert{notice.products.alerts_matched === 1 ? "" : "s"} matched to your product inventory
+                  (added as suggestions to confirm).
+                </p>
+              )}
+              {notice.products.unmatched.length > 0 && (
+                <>
+                  <p className="mt-1 opacity-90">
+                    Not in the inventory — left untagged so you can create them or tag the alerts yourself:
+                  </p>
+                  <ul className="mt-1 flex flex-wrap gap-1.5">
+                    {notice.products.unmatched.slice(0, 12).map((u) => (
+                      <li key={u.label} className="rounded-full border border-dashed border-current/30 px-2 py-0.5">
+                        {u.label} <span className="opacity-60">· {u.alerts}</span>
+                      </li>
+                    ))}
+                    {notice.products.unmatched.length > 12 && <li className="px-1 py-0.5 opacity-70">+{notice.products.unmatched.length - 12} more</li>}
+                  </ul>
+                  <Link href="/products" className="mt-2 inline-block font-medium underline underline-offset-2 hover:opacity-80">
+                    Open Product Inventory →
+                  </Link>
+                </>
+              )}
+            </div>
           )}
           {notice.showAlertsLink && (
             <Link href="/alerts" className="mt-3 inline-block text-sm font-medium underline underline-offset-2 hover:opacity-80">
@@ -201,6 +231,7 @@ export default function ImportsPage() {
         ],
         errors: rowErrors.map((e) => (e.rowNumber ? `Row ${e.rowNumber}: ${e.message}` : e.message)),
         showAlertsLink: (c.created ?? 0) + (c.updated ?? 0) > 0,
+        products: c.products,
       });
       setPreview(null);
     } catch {

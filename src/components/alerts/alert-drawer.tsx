@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  X, ExternalLink, Clock, User, Tag, FileText, AlertTriangle, Loader2,
+  X, ExternalLink, Clock, ChevronDown, User, Tag, FileText, AlertTriangle, Loader2,
   SlidersHorizontal, Link2, Package, FolderPlus, Check, UserPlus, UserMinus,
   CalendarCheck, Globe2, History, CheckCircle2, FolderMinus,
 } from "lucide-react";
@@ -124,7 +124,7 @@ function ActionButton({ icon: Icon, label, onClick, active }: { icon: React.Elem
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium shadow-sm transition-all hover:-translate-y-px hover:shadow ${
+      className={`inline-flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-2 text-[13px] font-medium shadow-sm transition-colors ${
         active
           ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300"
           : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
@@ -444,12 +444,11 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                       : data.assessment.days_remaining,
                   warn: data.assessment?.days_remaining != null && data.assessment.days_remaining <= 30,
                 },
-                { label: "Owner", value: data.alert.ownership.effective_owner_name || "Unassigned", small: true },
               ].map((f) => (
                 <div key={f.label} className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/60">
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{f.label}</div>
                   <div
-                    className={`mt-0.5 truncate ${f.small ? "text-sm font-semibold" : "text-lg font-bold"} tabular-nums ${
+                    className={`mt-0.5 truncate text-lg font-bold tabular-nums ${
                       f.warn ? "text-orange-600" : "text-slate-900 dark:text-white"
                     }`}
                   >
@@ -466,16 +465,50 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                   )}
                 </div>
               ))}
-            </div>
 
-            {/* Actions */}
-            {canEdit && (
-              <div className="mt-4 flex flex-wrap gap-2">
+              {/* Owner: shown and changed in one place */}
+              {(() => {
+                const ownerName = data.alert.ownership.effective_owner_name;
+                const ownerAvatar = members.find((m) => m.id === ownerId)?.avatar;
+                const viaGroup = !data.alert.ownership.direct_owner_name && !!ownerName;
+                const tile = (
+                  <>
+                    <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                      Owner
+                      {canEdit && <ChevronDown className="h-3 w-3" />}
+                    </div>
+                    <div className="mt-1 flex min-w-0 items-center gap-2">
+                      {ownerName ? (
+                        <UserAvatar name={ownerName} src={ownerAvatar} className="h-6 w-6 shrink-0 text-[9px]" />
+                      ) : (
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-slate-300 text-slate-400 dark:border-slate-600">
+                          <UserPlus className="h-3 w-3" />
+                        </span>
+                      )}
+                      <span className={`truncate text-sm font-semibold ${ownerName ? "text-slate-900 dark:text-white" : "text-slate-500"}`}>
+                        {ownerName || (canEdit ? "Assign owner" : "Unassigned")}
+                      </span>
+                    </div>
+                    {viaGroup && <div className="text-[10px] text-slate-500">From its group</div>}
+                  </>
+                );
+                if (!canEdit) return <div className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/60">{tile}</div>;
+                return (
                 <Popover open={assignOpen} onOpenChange={setAssignOpen}>
                   <PopoverTrigger asChild>
-                    <span><ActionButton icon={UserPlus} label={data.alert.ownership.effective_owner_name ? "Reassign" : "Assign owner"} active={assignOpen} /></span>
+                    <button
+                      type="button"
+                      aria-label={ownerName ? `Owner: ${ownerName}. Change owner` : "Assign owner"}
+                      className={`rounded-xl px-3 py-2.5 text-left ring-1 transition-colors ${
+                        assignOpen
+                          ? "bg-blue-50 ring-blue-300 dark:bg-blue-500/10 dark:ring-blue-500/40"
+                          : "bg-slate-50 ring-transparent hover:bg-blue-50/60 hover:ring-blue-200 dark:bg-slate-800/60 dark:hover:bg-blue-500/10 dark:hover:ring-blue-500/30"
+                      }`}
+                    >
+                      {tile}
+                    </button>
                   </PopoverTrigger>
-                  <PopoverContent align="start" className="w-72 p-1.5">
+                  <PopoverContent align="end" className="w-72 p-1.5">
                     <p className="px-2.5 py-1.5 text-xs font-semibold text-slate-500">Assign to</p>
                     {members.length === 0 && <p className="px-2.5 py-2 text-sm text-slate-500">No team members yet. Invite people from Team.</p>}
                     {members.map((m) => (
@@ -502,10 +535,16 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                     )}
                   </PopoverContent>
                 </Popover>
+                );
+              })()}
+            </div>
 
+            {/* Actions: one row on desktop, two by two on phones */}
+            {canEdit && (
+              <div aria-busy={busy} className={`mt-3 grid grid-cols-2 gap-2 transition-opacity sm:grid-cols-4 ${busy ? "pointer-events-none opacity-60" : ""}`}>
                 <Popover open={groupOpen} onOpenChange={setGroupOpen}>
                   <PopoverTrigger asChild>
-                    <span><ActionButton icon={FolderPlus} label={data.alert.group_title ? "Change group" : "Add to group"} active={groupOpen} /></span>
+                    <span className="block"><ActionButton icon={FolderPlus} label={data.alert.group_title ? "Change group" : "Add to group"} active={groupOpen} /></span>
                   </PopoverTrigger>
                   <PopoverContent align="start" className="w-80 p-1.5">
                     <GroupPicker
@@ -524,7 +563,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
 
                 <Popover open={productsOpen} onOpenChange={setProductsOpen}>
                   <PopoverTrigger asChild>
-                    <span><ActionButton icon={Package} label="Products" active={productsOpen} /></span>
+                    <span className="block"><ActionButton icon={Package} label="Products" active={productsOpen} /></span>
                   </PopoverTrigger>
                   <PopoverContent align="start" className="w-80 p-1.5">
                     <ProductPicker
@@ -543,7 +582,6 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                   onClick={() => setDeadlineOpen(true)}
                   active={deadlineOpen}
                 />
-                {busy && <Loader2 className="h-5 w-5 animate-spin self-center text-slate-400" />}
               </div>
             )}
           </>

@@ -10,6 +10,7 @@ import {
 import type { ValidatedRow } from "./validator";
 import { resolveJurisdiction } from "@/lib/geo/countries";
 import { getAsOfDate, recalculateAlert } from "@/lib/scoring/recalculate";
+import { matchImportedProducts, type ProductMatchResult } from "./product-matching";
 
 export interface ProcessResult {
   created: number;
@@ -19,6 +20,8 @@ export interface ProcessResult {
   invalid: number;
   conflicts: number;
   errors: { rowNumber: number; message: string }[];
+  /** Products matched from the file's Product column (suggested links; nothing is created). */
+  products?: ProductMatchResult;
 }
 
 function computeRowHash(mapped: Partial<Record<ImportColumnName, string | null>>): string {
@@ -202,6 +205,14 @@ async function postProcessAlerts(companyId: string, alertIds: string[], result: 
         message: `Alert saved, but mapping/scoring failed: ${err instanceof Error ? err.message : "Unknown error"}`,
       });
     }
+  }
+
+  // Suggest products from the inventory that match the file's Product column
+  try {
+    result.products = await matchImportedProducts(companyId, alertIds);
+  } catch (err) {
+    console.error("Product matching after import failed:", err);
+    result.errors.push({ rowNumber: 0, message: "Alerts saved, but matching products to the inventory failed." });
   }
 }
 

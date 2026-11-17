@@ -123,16 +123,20 @@ export async function GET(request: NextRequest) {
     paramIdx++;
   }
 
-  // Filter: deadline window
+  // Filter: deadline window. "Today" is the workspace's calendar date, not the database server's (UTC).
   const deadlineWithin = searchParams.get("deadline_within");
   if (deadlineWithin === "overdue") {
-    filters.push(`p.next_compliance_deadline IS NOT NULL AND p.next_compliance_deadline < CURRENT_DATE`);
+    filters.push(`p.next_compliance_deadline < (now() AT TIME ZONE $${paramIdx})::date`);
+    params.push(auth.time_zone || "UTC");
+    paramIdx++;
   } else if (deadlineWithin === "none") {
     filters.push(`p.next_compliance_deadline IS NULL`);
   } else if (deadlineWithin && /^\d+$/.test(deadlineWithin)) {
-    filters.push(`p.next_compliance_deadline IS NOT NULL AND p.next_compliance_deadline <= (CURRENT_DATE + ($${paramIdx} || ' days')::INTERVAL)`);
-    params.push(deadlineWithin);
-    paramIdx++;
+    // Upcoming only: today up to N days ahead (overdue alerts have their own filter)
+    filters.push(`p.next_compliance_deadline >= (now() AT TIME ZONE $${paramIdx})::date
+      AND p.next_compliance_deadline <= (now() AT TIME ZONE $${paramIdx})::date + $${paramIdx + 1}::int`);
+    params.push(auth.time_zone || "UTC", parseInt(deadlineWithin, 10));
+    paramIdx += 2;
   }
 
   // Filter: missing data / needs review
