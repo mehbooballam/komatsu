@@ -39,7 +39,7 @@ export default function ForgotPasswordPage() {
           <svg className="w-6 h-6 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
         </div>
         <h1 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Check your email</h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">If an account exists for <strong>{email}</strong>, we sent a password reset link.</p>
+        <p className="text-sm text-slate-500 dark:text-slate-400">If an account exists for <strong>{email}</strong>, you will receive a password reset link.</p>
         <Link href="/login" className="inline-block mt-6 text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400">Back to sign in</Link>
       </div>
     );

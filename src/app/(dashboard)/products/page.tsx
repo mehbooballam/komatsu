@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/alerts/confirm-dialog";
 import { useSessionInfo } from "@/components/layout/session-context";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 
 interface Model {
   id: string;
@@ -15,8 +16,8 @@ interface Model {
   name: string;
   description: string | null;
   is_active: boolean;
-  alert_count: number;
-  group_count: number;
+  alert_count: number | null;
+  group_count: number | null;
 }
 
 interface Family {
@@ -24,8 +25,8 @@ interface Family {
   name: string;
   description: string | null;
   state: "active" | "archived";
-  alert_count: number;
-  group_count: number;
+  alert_count: number | null;
+  group_count: number | null;
   products: Model[];
 }
 
@@ -37,7 +38,8 @@ const inputCls =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white";
 const menuItem = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-800";
 
-function Usage({ alerts, groups }: { alerts: number; groups: number }) {
+function Usage({ alerts, groups }: { alerts: number | null; groups: number | null }) {
+  if (alerts === null || groups === null) return null;
   if (!alerts && !groups) return <span className="text-xs text-slate-400">Not attached</span>;
   return (
     <span className="inline-flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
@@ -50,7 +52,7 @@ function Usage({ alerts, groups }: { alerts: number; groups: number }) {
 export default function ProductsPage() {
   const session = useSessionInfo();
   const role = session?.membership.role;
-  const canEdit = !!role && role !== "risk_owner";
+  const canEdit = !!session && hasCompanyWideAccess(session.membership.role, session.membership.access_scope);
   const canDelete = role === "company_admin" || role === "manager";
 
   const [families, setFamilies] = useState<Family[]>([]);
@@ -519,8 +521,9 @@ export default function ProductsPage() {
         title={pendingDelete?.kind === "family" ? `Delete “${pendingDelete.family.name}”?` : `Delete “${pendingDelete?.kind === "model" ? pendingDelete.model.name : ""}”?`}
         description={
           pendingDelete && (() => {
-            const alerts = pendingDelete.kind === "family" ? pendingDelete.family.alert_count : pendingDelete.model.alert_count;
-            const groups = pendingDelete.kind === "family" ? pendingDelete.family.group_count : pendingDelete.model.group_count;
+            const item = pendingDelete.kind === "family" ? pendingDelete.family : pendingDelete.model;
+            const alerts = item.alert_count ?? 0;
+            const groups = item.group_count ?? 0;
             const models = pendingDelete.kind === "family" ? pendingDelete.family.products.length : 0;
             return (
               <>

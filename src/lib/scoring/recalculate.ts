@@ -1,4 +1,6 @@
-import { query, getClient, parseDateOnly } from "@/lib/db";
+import { format } from "date-fns";
+import { query, parseDateOnly } from "@/lib/db";
+import { getWorkspaceDate } from "@/lib/workspace-date";
 import {
   calculateFullAssessment,
   type SourceRatings,
@@ -14,23 +16,7 @@ import {
  * otherwise current date in company timezone.
  */
 export function getAsOfDate(companyTimeZone: string): Date {
-  const frozen = process.env.COMPANY_FROZEN_DATE;
-  if (frozen) {
-    const [y, m, d] = frozen.split("-").map(Number);
-    return new Date(y, m - 1, d);
-  }
-  const now = new Date();
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: companyTimeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const parts = formatter.formatToParts(now);
-  const year = Number(parts.find((p) => p.type === "year")!.value);
-  const month = Number(parts.find((p) => p.type === "month")!.value);
-  const day = Number(parts.find((p) => p.type === "day")!.value);
-  return new Date(year, month - 1, day);
+  return parseDateOnly(getWorkspaceDate(companyTimeZone));
 }
 
 /** Recalculate a single alert's score and update projection. */
@@ -186,7 +172,7 @@ export async function recalculateAlert(
       ) RETURNING id`,
       [
         companyId, alertId, policyId, revisionId, selectedDeadlineId, forecastId,
-        assessment.as_of_date.toISOString().split("T")[0],
+        format(assessment.as_of_date, "yyyy-MM-dd"),
         assessment.days_remaining, assessment.margin_days,
         assessment.factor_market_access, assessment.factor_cost_to_implement,
         assessment.factor_human_resources, assessment.factor_urgency,

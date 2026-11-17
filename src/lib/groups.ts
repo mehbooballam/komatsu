@@ -39,7 +39,7 @@ export async function loadGroupTree(companyId: string): Promise<GroupNode[]> {
             rg.owner_membership_id, rg.state, rg.created_at, up.display_name AS owner_name,
             COALESCE(c.cnt, 0)::int AS alert_count, c.top_rank
      FROM regulation_groups rg
-     LEFT JOIN memberships m ON m.id = rg.owner_membership_id
+     LEFT JOIN memberships m ON m.id = rg.owner_membership_id AND m.company_id = rg.company_id
      LEFT JOIN user_profiles up ON up.id = m.user_id
      LEFT JOIN (
        SELECT a.primary_group_id AS gid, COUNT(*) AS cnt,

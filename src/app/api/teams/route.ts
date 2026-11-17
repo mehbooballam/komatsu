@@ -9,12 +9,15 @@ export async function GET() {
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    if (!canManageTeams(session.membership.role)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const result = await query(
       `SELECT t.id, t.name, t.created_at, t.archived_at,
               COUNT(tm.id)::int as member_count
        FROM teams t
-       LEFT JOIN team_memberships tm ON tm.team_id = t.id
+       LEFT JOIN team_memberships tm ON tm.team_id = t.id AND tm.company_id = t.company_id
        WHERE t.company_id = $1 AND t.archived_at IS NULL
        GROUP BY t.id
        ORDER BY t.name`,

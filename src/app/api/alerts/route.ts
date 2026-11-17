@@ -1,40 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { cookies } from "next/headers";
-import crypto from "crypto";
+import { getAuth, unauthorized } from "@/lib/auth-helpers";
+import { alertScopeSql } from "@/lib/alerts/access";
+import { getWorkspaceDate } from "@/lib/workspace-date";
 import { loadGroupTree, inGroupSubtreeSql } from "@/lib/groups";
 import { alertProducts } from "@/lib/products";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function getAuth() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("komatsu_session")?.value;
-  if (!token) return null;
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-  const res = await query(
-    `SELECT s.user_id, m.id as membership_id, m.company_id, m.role, m.access_scope, c.time_zone
-     FROM sessions s
-     JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
-     JOIN companies c ON c.id = m.company_id
-     WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
-    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
-  );
-  return res.rows[0] || null;
-}
-
-const PRIORITY_SORT_ORDER: Record<string, number> = {
-  critical: 0,
-  high: 1,
-  moderate: 2,
-  low: 3,
-  unscored: 4,
-};
-
 export async function GET(request: NextRequest) {
   const auth = await getAuth();
-  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth) return unauthorized();
 
   const companyId = auth.company_id;
   const searchParams = request.nextUrl.searchParams;
@@ -126,16 +102,16 @@ export async function GET(request: NextRequest) {
   // Filter: deadline window. "Today" is the workspace's calendar date, not the database server's (UTC).
   const deadlineWithin = searchParams.get("deadline_within");
   if (deadlineWithin === "overdue") {
-    filters.push(`p.next_compliance_deadline < (now() AT TIME ZONE $${paramIdx})::date`);
-    params.push(auth.time_zone || "UTC");
+    filters.push(`p.next_compliance_deadline < $${paramIdx}::date`);
+    params.push(getWorkspaceDate(auth.time_zone));
     paramIdx++;
   } else if (deadlineWithin === "none") {
     filters.push(`p.next_compliance_deadline IS NULL`);
   } else if (deadlineWithin && /^\d+$/.test(deadlineWithin)) {
     // Upcoming only: today up to N days ahead (overdue alerts have their own filter)
-    filters.push(`p.next_compliance_deadline >= (now() AT TIME ZONE $${paramIdx})::date
-      AND p.next_compliance_deadline <= (now() AT TIME ZONE $${paramIdx})::date + $${paramIdx + 1}::int`);
-    params.push(auth.time_zone || "UTC", parseInt(deadlineWithin, 10));
+    filters.push(`p.next_compliance_deadline >= $${paramIdx}::date
+      AND p.next_compliance_deadline <= $${paramIdx}::date + $${paramIdx + 1}::int`);
+    params.push(getWorkspaceDate(auth.time_zone), parseInt(deadlineWithin, 10));
     paramIdx += 2;
   }
 
@@ -157,17 +133,8 @@ export async function GET(request: NextRequest) {
     paramIdx++;
   }
 
-  // Risk owner scope restriction
-  if (auth.role === "risk_owner") {
-    filters.push(`(
-      a.direct_owner_membership_id = $${paramIdx}
-      OR (a.direct_owner_membership_id IS NULL AND a.primary_group_id IN (
-        SELECT id FROM regulation_groups WHERE owner_membership_id = $${paramIdx}
-      ))
-    )`);
-    params.push(auth.membership_id);
-    paramIdx++;
-  }
+  filters.push(alertScopeSql(auth, params, searchParams.get("assigned_to_me") === "true"));
+  paramIdx = params.length + 1;
 
   const whereClause = filters.join(" AND ");
 
@@ -236,8 +203,8 @@ export async function GET(request: NextRequest) {
      FROM alerts a
      LEFT JOIN alert_active_projections p ON p.alert_id = a.id AND p.company_id = a.company_id
      LEFT JOIN score_assessments sa ON sa.id = p.latest_assessment_id
-     LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id
-     LEFT JOIN memberships owner_m ON owner_m.id = COALESCE(a.direct_owner_membership_id, rg.owner_membership_id)
+     LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id AND rg.company_id = a.company_id
+     LEFT JOIN memberships owner_m ON owner_m.id = COALESCE(a.direct_owner_membership_id, rg.owner_membership_id) AND owner_m.company_id = a.company_id
      LEFT JOIN user_profiles owner_u ON owner_u.id = owner_m.user_id
      WHERE ${whereClause}
      ORDER BY ${orderClause}

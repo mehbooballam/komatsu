@@ -70,9 +70,9 @@ function toProduct(r: LinkRow): Pick<AttachedProduct, "key" | "kind" | "id" | "n
 }
 
 const LINK_JOINS = `
-  LEFT JOIN product_families pf ON pf.id = l.family_id
-  LEFT JOIN products pr ON pr.id = l.product_id
-  LEFT JOIN product_families ppf ON ppf.id = pr.family_id`;
+  LEFT JOIN product_families pf ON pf.id = l.family_id AND pf.company_id = l.company_id
+  LEFT JOIN products pr ON pr.id = l.product_id AND pr.company_id = l.company_id
+  LEFT JOIN product_families ppf ON ppf.id = pr.family_id AND ppf.company_id = l.company_id`;
 const LINK_COLS = `l.family_id, l.product_id, pf.name AS family_name, pr.name AS product_name,
   ppf.name AS product_family_name, pr.model_code`;
 

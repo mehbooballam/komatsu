@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { loadGroupTree, checkParent, MAX_GROUP_DEPTH } from "@/lib/groups";
 import { groupProducts } from "@/lib/products";
 
@@ -8,6 +9,7 @@ import { groupProducts } from "@/lib/products";
 export async function GET() {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   const [groups, products] = await Promise.all([loadGroupTree(auth.company_id), groupProducts(auth.company_id)]);
   return NextResponse.json({
     groups: groups.map((g) => ({ ...g, products: products.get(g.id) || [] })),
@@ -18,6 +20,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   if (!canEdit(auth.role)) return forbidden();
 
   const body = await request.json();

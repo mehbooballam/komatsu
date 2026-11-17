@@ -51,6 +51,10 @@ cp .env.example .env
 
 The defaults in `.env.example` match the seed scripts — no changes needed for local dev.
 
+#### Account email
+
+Workspace invitations and password resets send email through [Resend](https://resend.com/docs/api-reference/emails/send-email). Set `RESEND_API_KEY` and `AUTH_EMAIL_FROM` in the server environment using a verified sender. Set `NEXTAUTH_URL` to the app's public HTTPS origin for production. For local development, the default loopback URL is supported. Keep [click tracking](https://resend.com/blog/introducing-custom-tracking-domain) disabled on the sending domain to avoid rewriting credential links. An instance without email configuration can still sign users in and out.
+
 #### 4. Run migrations
 
 ```bash

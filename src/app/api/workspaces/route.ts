@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query, getClient } from "@/lib/db";
 import { getAuth, createAuditEvent } from "@/lib/auth-helpers";
 import { setActiveWorkspace, slugify } from "@/lib/workspaces";
+import { isValidWorkspaceTimeZone } from "@/lib/workspace-date";
 
 /** GET /api/workspaces — workspaces the current user belongs to. */
 export async function GET() {
@@ -9,7 +10,9 @@ export async function GET() {
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const res = await query(
     `SELECT c.id, c.name, c.slug, m.role, c.settings->>'logo' AS logo, c.settings->>'icon' AS icon,
-            (SELECT COUNT(*)::int FROM alerts a WHERE a.company_id = c.id AND a.archived_at IS NULL) AS alert_count
+            CASE WHEN m.role IN ('company_admin', 'manager') OR (m.role = 'reviewer' AND m.access_scope = 'company')
+              THEN (SELECT COUNT(*)::int FROM alerts a WHERE a.company_id = c.id AND a.archived_at IS NULL)
+            END AS alert_count
      FROM memberships m JOIN companies c ON c.id = m.company_id
      WHERE m.user_id = $1 AND m.state = 'active' AND c.archived_at IS NULL
      ORDER BY c.name`,
@@ -30,9 +33,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Only administrators can create workspaces" }, { status: 403 });
   }
 
-  const { name, time_zone } = (await request.json().catch(() => ({}))) as { name?: string; time_zone?: string };
-  const title = (name || "").trim();
-  if (title.length < 2) return NextResponse.json({ error: "Workspace name is required" }, { status: 400 });
+  const { name, time_zone } = (await request.json().catch(() => null)) ?? {};
+  const title = typeof name === "string" ? name.trim() : "";
+  if (title.length < 2 || title.length > 120) return NextResponse.json({ error: "Name must be 2–120 characters" }, { status: 400 });
+  if (time_zone !== undefined && !isValidWorkspaceTimeZone(time_zone)) {
+    return NextResponse.json({ error: "Unknown time zone" }, { status: 400 });
+  }
 
   const client = await getClient();
   try {
@@ -47,7 +53,8 @@ export async function POST(request: NextRequest) {
     }
 
     const current = await client.query(`SELECT time_zone, active_policy_id FROM companies WHERE id = $1`, [auth.company_id]);
-    const tz = time_zone || current.rows[0]?.time_zone || "UTC";
+    const currentTimeZone = current.rows[0]?.time_zone;
+    const tz = time_zone ?? (isValidWorkspaceTimeZone(currentTimeZone) ? currentTimeZone : "UTC");
 
     const company = await client.query(
       `INSERT INTO companies (name, slug, time_zone, settings) VALUES ($1, $2, $3, '{}') RETURNING id, name, slug`,

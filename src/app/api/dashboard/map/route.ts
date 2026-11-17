@@ -1,42 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { cookies } from "next/headers";
-import crypto from "crypto";
-
-async function getAuth() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("komatsu_session")?.value;
-  if (!token) return null;
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-  const res = await query(
-    `SELECT s.user_id, m.id as membership_id, m.company_id, m.role, m.access_scope, c.time_zone
-     FROM sessions s
-     JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
-     JOIN companies c ON c.id = m.company_id
-     WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
-    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
-  );
-  return res.rows[0] || null;
-}
-
-const PRIORITY_ORDER: Record<string, number> = {
-  critical: 4,
-  high: 3,
-  moderate: 2,
-  low: 1,
-  unscored: 0,
-};
+import { getAuth, unauthorized, forbidden } from "@/lib/auth-helpers";
+import { canViewDashboard } from "@/lib/auth/permissions";
 
 export async function GET(request: NextRequest) {
   const auth = await getAuth();
-  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth) return unauthorized();
+  if (!canViewDashboard(auth.role, auth.access_scope)) return forbidden();
 
   const companyId = auth.company_id;
   const searchParams = request.nextUrl.searchParams;
   const priorityFilter = searchParams.get("priority");
   const stageFilter = searchParams.get("stage");
-  const productFilter = searchParams.get("product");
 
   let filterClauses = "";
   const params: unknown[] = [companyId];
@@ -66,7 +41,7 @@ export async function GET(request: NextRequest) {
        COUNT(DISTINCT a.id) FILTER (WHERE p.effective_priority IS NULL OR p.effective_priority = 'unscored') AS unscored_count
      FROM alert_geographies ag
      JOIN geographies g ON g.id = ag.geography_id
-     JOIN alerts a ON a.id = ag.alert_id AND a.archived_at IS NULL
+     JOIN alerts a ON a.id = ag.alert_id AND a.company_id = ag.company_id AND a.archived_at IS NULL
      LEFT JOIN alert_active_projections p ON p.alert_id = a.id AND p.company_id = a.company_id
      WHERE ag.company_id = $1 AND ag.state != 'rejected'${filterClauses}
      GROUP BY g.id, g.code, g.iso_code, g.display_name
@@ -77,7 +52,7 @@ export async function GET(request: NextRequest) {
   const unmappedRes = await query(
     `SELECT COUNT(DISTINCT a.id) AS unmapped_count
      FROM alerts a
-     LEFT JOIN alert_geographies ag ON ag.alert_id = a.id AND ag.state != 'rejected'
+     LEFT JOIN alert_geographies ag ON ag.alert_id = a.id AND ag.company_id = a.company_id AND ag.state != 'rejected'
      LEFT JOIN alert_active_projections p ON p.alert_id = a.id AND p.company_id = a.company_id
      WHERE a.company_id = $1 AND a.archived_at IS NULL AND ag.id IS NULL${filterClauses}`,
     params

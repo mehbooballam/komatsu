@@ -5,13 +5,11 @@ import Link from "next/link";
 
 interface ImportBatch {
   id: string;
-  original_filename: string;
-  input_format: string;
+  filename: string;
+  format: string;
   status: string;
-  row_counts: Record<string, number>;
-  created_at: string;
-  completed_at: string | null;
-  uploader_name?: string;
+  rowCounts: Record<string, number>;
+  createdAt: string;
 }
 
 interface PreviewData {
@@ -152,20 +150,27 @@ export default function ImportsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadBatches = useCallback(async () => {
-    const res = await fetch("/api/imports");
-    const data = await res.json();
-    setBatches(data.batches || []);
-    setLoading(false);
+    try {
+      const res = await fetch("/api/imports");
+      if (res.ok) {
+        const data = await res.json();
+        setBatches(data.imports || []);
+      }
+    } catch (error) {
+      console.error("Could not refresh import history:", error);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     fetch("/api/imports")
-      .then((res) => (res.ok ? res.json() : { batches: [] }))
-      .catch(() => ({ batches: [] }))
+      .then((res) => (res.ok ? res.json() : { imports: [] }))
+      .catch(() => ({ imports: [] }))
       .then((data) => {
         if (cancelled) return;
-        setBatches(data.batches || []);
+        setBatches(data.imports || []);
         setLoading(false);
       });
     return () => {
@@ -383,20 +388,20 @@ export default function ImportsPage() {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
               {batches.map((b) => (
                 <tr key={b.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                  <td className="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white truncate max-w-[200px]">{b.original_filename}</td>
-                  <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 uppercase hidden sm:table-cell">{b.input_format}</td>
+                  <td className="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white truncate max-w-[200px]">{b.filename}</td>
+                  <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 uppercase hidden sm:table-cell">{b.format}</td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusColors[b.status] || "bg-slate-100 text-slate-600"}`}>
                       {b.status}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 hidden md:table-cell">
-                    {b.row_counts?.total ??
-                      ((b.row_counts?.created ?? 0) + (b.row_counts?.updated ?? 0) + (b.row_counts?.unchanged ?? 0) + (b.row_counts?.skipped ?? 0) || "—")}
-                    {b.row_counts?.created ?<span className="text-green-600 ml-1">(+{b.row_counts.created})</span> : null}
+                    {b.rowCounts?.total ??
+                      ((b.rowCounts?.created ?? 0) + (b.rowCounts?.updated ?? 0) + (b.rowCounts?.unchanged ?? 0) + (b.rowCounts?.skipped ?? 0) || "—")}
+                    {b.rowCounts?.created ? <span className="text-green-600 ml-1">(+{b.rowCounts.created})</span> : null}
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400 hidden lg:table-cell">
-                    {new Date(b.created_at).toLocaleDateString()}
+                    {new Date(b.createdAt).toLocaleDateString()}
                   </td>
                 </tr>
               ))}

@@ -1,53 +1,45 @@
-import { NextResponse } from "next/server";
+import { randomBytes } from "node:crypto";
+import { after, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import crypto from "crypto";
+import { getAccountMailer } from "@/lib/auth/account-email";
+import { parseEmailAddress } from "@/lib/auth/email-address";
+import { hashToken } from "@/lib/auth/session";
 
 export async function POST(request: Request) {
-  try {
-    const { email } = await request.json();
+  const body = await request.json().catch(() => null);
+  const email = parseEmailAddress(body?.email);
+  if (!email) return NextResponse.json({ error: "A valid email is required" }, { status: 400 });
 
-    if (!email) {
-      return NextResponse.json(
-        { error: "Email is required" },
-        { status: 400 }
-      );
-    }
-
-    const emailLower = email.toLowerCase().trim();
-
-    // Always return success to prevent email enumeration
-    const userResult = await query(
-      `SELECT id FROM user_profiles WHERE LOWER(email) = $1`,
-      [emailLower]
-    );
-
-    if (userResult.rows.length > 0) {
-      const token = crypto.randomBytes(32).toString("hex");
-      const tokenHash = crypto
-        .createHash("sha256")
-        .update(token)
-        .digest("hex");
-      const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-
-      await query(
-        `UPDATE user_profiles SET password_reset_token = $1, password_reset_expires = $2 WHERE id = $3`,
-        [tokenHash, expires.toISOString(), userResult.rows[0].id]
-      );
-
-      // In production, send email. For dev, log it.
-      console.log(`[DEV] Password reset token for ${emailLower}: ${token}`);
-      console.log(`[DEV] Reset URL: ${process.env.NEXTAUTH_URL}/reset-password?token=${token}`);
-    }
-
-    return NextResponse.json({
-      message:
-        "If an account exists with that email, a password reset link has been sent",
-    });
-  } catch (error: unknown) {
-    console.error("Forgot password error:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+  const deliver = getAccountMailer();
+  if (!deliver) {
+    return NextResponse.json({ error: "Password reset email is not configured. Contact support for help." }, { status: 503 });
   }
+
+  // Perform account lookup and delivery after the response to keep the timing independent of account existence.
+  after(async () => {
+    try {
+      const token = randomBytes(32).toString("hex");
+      const tokenHash = hashToken(token);
+      // Repeated requests cannot invalidate a just-issued link or send back-to-back emails.
+      const updated = await query(
+        `UPDATE user_profiles
+         SET password_reset_token = $1, password_reset_expires = now() + interval '1 hour'
+         WHERE LOWER(email) = $2
+           AND (password_reset_expires IS NULL OR password_reset_expires <= now() + interval '59 minutes')`,
+        [tokenHash, email]
+      );
+
+      if (updated.rowCount && !(await deliver("password-reset", email, token))) {
+        await query(
+          `UPDATE user_profiles SET password_reset_token = NULL, password_reset_expires = NULL
+           WHERE LOWER(email) = $1 AND password_reset_token = $2`,
+          [email, tokenHash]
+        );
+      }
+    } catch {
+      console.error("Password reset request could not be processed");
+    }
+  });
+
+  return NextResponse.json({ message: "If an account exists with that email, you will receive a password reset link" });
 }

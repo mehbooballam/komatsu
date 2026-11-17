@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden } from "@/lib/auth-helpers";
+import { alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 import { MAX_NOTE_LENGTH, NOTE_SELECT } from "@/lib/notes";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -19,6 +20,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   const auth = await getAuth();
   if (!auth) return unauthorized();
   const { id, noteId } = await params;
+  if (!(await canAccessAlert(auth, id))) return alertNotFound();
   const note = await findNote(auth.company_id, id, noteId);
   // Someone else's private note is reported as missing, not forbidden
   if (!note || (note.visibility === "private" && note.author_membership_id !== auth.membership_id)) {
@@ -49,6 +51,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   const auth = await getAuth();
   if (!auth) return unauthorized();
   const { id, noteId } = await params;
+  if (!(await canAccessAlert(auth, id))) return alertNotFound();
   const note = await findNote(auth.company_id, id, noteId);
   if (!note || (note.visibility === "private" && note.author_membership_id !== auth.membership_id)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

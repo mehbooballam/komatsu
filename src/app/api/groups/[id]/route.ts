@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query, getClient } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, canAssign, createAuditEvent } from "@/lib/auth-helpers";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { loadGroupTree, checkParent, subtreeIds } from "@/lib/groups";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   const { id } = await params;
 
   const tree = await loadGroupTree(auth.company_id);
@@ -16,7 +18,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     `SELECT a.id, a.external_alert_id, a.title, a.stage, a.primary_group_id AS group_id,
             aap.effective_priority, aap.effective_total, aap.next_compliance_deadline
      FROM alerts a
-     LEFT JOIN alert_active_projections aap ON aap.alert_id = a.id
+     LEFT JOIN alert_active_projections aap ON aap.alert_id = a.id AND aap.company_id = a.company_id
      WHERE a.primary_group_id = ANY($1::uuid[]) AND a.company_id = $2 AND a.archived_at IS NULL
      ORDER BY a.title`,
     [subtreeIds(tree, id), auth.company_id]
@@ -32,6 +34,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   if (!canEdit(auth.role)) return forbidden();
   const { id } = await params;
 
@@ -39,19 +42,24 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 
   if (body.action === "assign_owner") {
     if (!canAssign(auth.role)) return forbidden();
+    const membershipId = body.membership_id ?? null;
+    if (membershipId !== null) {
+      const member = await query(`SELECT 1 FROM memberships WHERE id::text = $1 AND company_id = $2 AND state = 'active'`, [membershipId, auth.company_id]);
+      if (!member.rowCount) return NextResponse.json({ error: "Member not found" }, { status: 400 });
+    }
     const before = await query(`SELECT owner_membership_id FROM regulation_groups WHERE id = $1 AND company_id = $2`, [id, auth.company_id]);
     if (before.rows.length === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    await query(`UPDATE regulation_groups SET owner_membership_id = $1 WHERE id = $2 AND company_id = $3`, [body.membership_id || null, id, auth.company_id]);
+    await query(`UPDATE regulation_groups SET owner_membership_id = $1 WHERE id = $2 AND company_id = $3`, [membershipId, id, auth.company_id]);
 
     await query(
       `INSERT INTO assignment_events (company_id, group_id, before_owner_id, after_owner_id, origin, cause, actor_membership_id)
        VALUES ($1, $2, $3, $4, 'direct', $5, $6)`,
-      [auth.company_id, id, before.rows[0].owner_membership_id, body.membership_id || null, "Group owner assignment", auth.membership_id]
+      [auth.company_id, id, before.rows[0].owner_membership_id, membershipId, "Group owner assignment", auth.membership_id]
     );
 
     await createAuditEvent(auth.company_id, auth.membership_id, "assign_owner", "regulation_group", id,
-      { owner: before.rows[0].owner_membership_id }, { owner: body.membership_id });
+      { owner: before.rows[0].owner_membership_id }, { owner: membershipId });
 
     return NextResponse.json({ success: true });
   }
@@ -96,6 +104,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   if (!canEdit(auth.role)) return forbidden();
   const { id } = await params;
 

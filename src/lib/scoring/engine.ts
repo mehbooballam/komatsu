@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { addMonths, differenceInCalendarDays, endOfMonth, isAfter, isBefore, isEqual, startOfDay } from "date-fns";
+import { addMonths, differenceInCalendarDays, endOfMonth, format, isAfter, isBefore, isEqual, startOfDay } from "date-fns";
 
 import {
   bandForTotal,
@@ -453,7 +453,7 @@ export function calculateFullAssessment(params: {
     policyVersion,
     policyHash: hashObject(policy as unknown as Record<string, unknown>),
     totalOverride: totalOverride?.value ?? null,
-    asOfDate: asOfDate.toISOString().split("T")[0],
+    asOfDate: format(asOfDate, "yyyy-MM-dd"),
   };
   const input_signature = hashObject(signatureInputs);
 

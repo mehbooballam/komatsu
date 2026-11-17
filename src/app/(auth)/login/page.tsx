@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { workspaceHome } from "@/lib/auth/permissions";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -26,7 +27,7 @@ export default function LoginPage() {
         setError(data.error || "Login failed");
         return;
       }
-      router.push("/dashboard");
+      router.push(workspaceHome(data.membership.role, data.membership.accessScope));
     } catch {
       setError("Network error. Please try again.");
     } finally {

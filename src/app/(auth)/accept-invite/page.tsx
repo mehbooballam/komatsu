@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Suspense } from "react";
+import { useEmailLinkToken } from "@/hooks/use-email-link-token";
+import { workspaceHome } from "@/lib/auth/permissions";
 
 function AcceptInviteContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const token = searchParams.get("token") || "";
+  const token = useEmailLinkToken();
   const [mode, setMode] = useState<"existing" | "new">("existing");
   const [form, setForm] = useState({ email: "", password: "", display_name: "", confirm_password: "" });
   const [error, setError] = useState("");
@@ -26,11 +27,11 @@ function AcceptInviteContent() {
       const res = await fetch("/api/auth/accept-invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, mode, ...form }),
+        body: JSON.stringify({ token, mode, email: form.email, password: form.password, displayName: form.display_name }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Failed to accept invitation"); return; }
-      router.push("/dashboard");
+      router.replace(workspaceHome(data.membership.role, data.membership.accessScope));
     } catch {
       setError("Network error.");
     } finally {

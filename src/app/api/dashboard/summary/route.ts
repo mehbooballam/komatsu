@@ -1,36 +1,16 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { cookies } from "next/headers";
-import crypto from "crypto";
-
-async function getAuth() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("komatsu_session")?.value;
-  if (!token) return null;
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-  const res = await query(
-    `SELECT s.user_id, m.id as membership_id, m.company_id, m.role, m.access_scope, c.time_zone
-     FROM sessions s
-     JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
-     JOIN companies c ON c.id = m.company_id
-     WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
-    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
-  );
-  return res.rows[0] || null;
-}
+import { forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
+import { canViewDashboard } from "@/lib/auth/permissions";
+import { getWorkspaceDate } from "@/lib/workspace-date";
 
 export async function GET() {
   const auth = await getAuth();
-  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth) return unauthorized();
+  if (!canViewDashboard(auth.role, auth.access_scope)) return forbidden();
 
   const companyId = auth.company_id;
-  const tz = auth.time_zone || "UTC";
-
-  const frozenDate = process.env.COMPANY_FROZEN_DATE;
-  const asOfExpr = frozenDate
-    ? `'${frozenDate}'::date`
-    : `(now() AT TIME ZONE '${tz}')::date`;
+  const asOfDate = getWorkspaceDate(auth.time_zone);
 
   const [totals, lastImport, scoreBands] = await Promise.all([
     query(
@@ -41,15 +21,15 @@ export async function GET() {
         COUNT(*) FILTER (WHERE p.is_active AND p.effective_priority = 'moderate') AS moderate_count,
         COUNT(*) FILTER (WHERE p.is_active AND p.effective_priority = 'low') AS low_count,
         COUNT(*) FILTER (WHERE p.is_active AND (p.effective_priority IS NULL OR p.effective_priority = 'unscored')) AS unscored_count,
-        COUNT(*) FILTER (WHERE p.is_active AND p.next_compliance_deadline >= ${asOfExpr}
-          AND p.next_compliance_deadline <= (${asOfExpr} + INTERVAL '30 days')) AS due_soon_count,
+        COUNT(*) FILTER (WHERE p.is_active AND p.next_compliance_deadline >= $2::date
+          AND p.next_compliance_deadline <= $2::date + 30) AS due_soon_count,
         COUNT(*) FILTER (WHERE p.is_active AND COALESCE(a.direct_owner_membership_id, rg.owner_membership_id) IS NOT NULL) AS assigned_count,
         COUNT(*) FILTER (WHERE p.is_active AND (p.effective_total IS NULL OR p.latest_assessment_id IS NULL)) AS needs_review_count
        FROM alert_active_projections p
        JOIN alerts a ON a.id = p.alert_id
        LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id
        WHERE p.company_id = $1`,
-      [companyId]
+      [companyId, asOfDate]
     ),
     query(
       `SELECT MAX(completed_at) AS last_import_date
@@ -91,6 +71,6 @@ export async function GET() {
     // Alerts with an owner (directly or through their group)
     assigned_count: parseInt(row.assigned_count) || 0,
     last_import_date: lastImport.rows[0]?.last_import_date || null,
-    as_of_date: frozenDate || new Date().toISOString().slice(0, 10),
+    as_of_date: asOfDate,
   });
 }

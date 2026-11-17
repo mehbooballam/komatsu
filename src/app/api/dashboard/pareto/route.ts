@@ -1,28 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { cookies } from "next/headers";
-import crypto from "crypto";
-
-async function getAuth() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("komatsu_session")?.value;
-  if (!token) return null;
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-  const res = await query(
-    `SELECT s.user_id, m.id as membership_id, m.company_id, m.role, m.access_scope, c.time_zone
-     FROM sessions s
-     JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
-     JOIN companies c ON c.id = m.company_id
-     WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
-    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
-  );
-  return res.rows[0] || null;
-}
+import { getAuth, unauthorized, forbidden } from "@/lib/auth-helpers";
+import { canViewDashboard } from "@/lib/auth/permissions";
 
 export async function GET(request: NextRequest) {
   const auth = await getAuth();
-  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth) return unauthorized();
+  if (!canViewDashboard(auth.role, auth.access_scope)) return forbidden();
 
   const companyId = auth.company_id;
   const searchParams = request.nextUrl.searchParams;
@@ -36,7 +20,7 @@ export async function GET(request: NextRequest) {
        p.effective_total,
        p.effective_priority
      FROM alert_active_projections p
-     JOIN alerts a ON a.id = p.alert_id
+     JOIN alerts a ON a.id = p.alert_id AND a.company_id = p.company_id
      WHERE p.company_id = $1
        AND p.is_active = TRUE
        AND p.effective_total IS NOT NULL

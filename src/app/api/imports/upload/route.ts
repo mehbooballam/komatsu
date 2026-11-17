@@ -3,28 +3,24 @@ import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import { query } from "@/lib/db";
-import { getSessionFromRequest, requireRole } from "@/lib/auth/api-helper";
+import { canImport, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
 import { parseXlsx, listWorksheets } from "@/lib/import/parser-xlsx";
 import { parseCsv } from "@/lib/import/parser-csv";
 import { validateRows } from "@/lib/import/validator";
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  if (!requireRole(session, "company_admin", "manager")) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const auth = await getAuth();
+  if (!auth) return unauthorized();
+  if (!canImport(auth.role)) return forbidden();
 
-  const formData = await request.formData();
-  const file = formData.get("file") as File | null;
-  const worksheetName = formData.get("worksheet") as string | null;
-  const headerRow = parseInt(formData.get("headerRow") as string) || 1;
-  const reportDate = formData.get("reportDate") as string | null;
+  const formData = await request.formData().catch(() => null);
+  if (!formData) {
+    return NextResponse.json({ error: "Invalid upload form" }, { status: 400 });
+  }
+  const file = formData.get("file");
 
-  if (!file) {
-    return NextResponse.json({ error: "No file provided" }, { status: 400 });
+  if (!(file instanceof File) || file.size === 0 || !file.name || file.name.includes("\0")) {
+    return NextResponse.json({ error: "Select a non-empty file with a valid name" }, { status: 400 });
   }
 
   const ext = path.extname(file.name).toLowerCase();
@@ -36,23 +32,47 @@ export async function POST(request: NextRequest) {
   }
 
   if (file.size > 50 * 1024 * 1024) {
-    return NextResponse.json({ error: "File too large (max 50MB)" }, { status: 400 });
+    return NextResponse.json({ error: "File too large (max 50 MB)" }, { status: 413 });
+  }
+
+  const worksheetName = formData.get("worksheet");
+  if (worksheetName !== null && (typeof worksheetName !== "string" || worksheetName.includes("\0"))) {
+    return NextResponse.json({ error: "Invalid worksheet name" }, { status: 400 });
+  }
+
+  const headerRowValue = formData.get("headerRow") ?? "1";
+  const headerRow = Number(headerRowValue);
+  if (typeof headerRowValue !== "string" || !/^\d+$/.test(headerRowValue) || headerRow < 1 || headerRow > 1_048_576) {
+    return NextResponse.json({ error: "Invalid header row number" }, { status: 400 });
+  }
+  if (ext === ".csv" && (worksheetName || headerRow !== 1)) {
+    return NextResponse.json({ error: "CSV files use the first row as the header and have no worksheets" }, { status: 400 });
+  }
+
+  const reportDate = formData.get("reportDate");
+  if (reportDate !== null && reportDate !== "") {
+    if (typeof reportDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(reportDate) || reportDate.startsWith("0000")) {
+      return NextResponse.json({ error: "Report date must use YYYY-MM-DD" }, { status: 400 });
+    }
+    const parsedDate = new Date(`${reportDate}T00:00:00Z`);
+    if (!Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== reportDate) {
+      return NextResponse.json({ error: "Report date must be a valid calendar date" }, { status: 400 });
+    }
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const digest = crypto.createHash("sha256").update(buffer).digest("hex");
 
   const uploadDir = process.env.UPLOAD_DIR || "./uploads";
-  await mkdir(uploadDir, { recursive: true });
-
-  const objectKey = `${session.membership.company_id}/${Date.now()}-${file.name}`;
+  const uploadId = crypto.randomUUID();
+  const objectKey = `${auth.company_id}/${uploadId}${ext}`;
   const filePath = path.join(uploadDir, objectKey);
   await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, buffer);
+  await writeFile(filePath, buffer, { flag: "wx", mode: 0o600 });
 
   const feedResult = await query(
     `SELECT id FROM feeds WHERE company_id = $1 AND dataset_key = 'daptic-default' LIMIT 1`,
-    [session.membership.company_id]
+    [auth.company_id]
   );
 
   let feedId: string;
@@ -61,14 +81,14 @@ export async function POST(request: NextRequest) {
       `INSERT INTO feeds (company_id, provider_name, dataset_key, name)
        VALUES ($1, 'Daptic', 'daptic-default', 'Daptic Alert Feed')
        RETURNING id`,
-      [session.membership.company_id]
+      [auth.company_id]
     );
     feedId = newFeed.rows[0].id;
   } else {
     feedId = feedResult.rows[0].id;
   }
 
-  const idempotencyKey = `${digest}-${Date.now()}`;
+  const idempotencyKey = `${digest}-${uploadId}`;
 
   const batchResult = await query(
     `INSERT INTO import_batches (
@@ -78,9 +98,9 @@ export async function POST(request: NextRequest) {
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'validating', $11)
      RETURNING id`,
     [
-      session.membership.company_id,
+      auth.company_id,
       feedId,
-      session.membership.id,
+      auth.membership_id,
       ext.replace(".", ""),
       file.name,
       worksheetName || null,
@@ -95,9 +115,10 @@ export async function POST(request: NextRequest) {
   const batchId = batchResult.rows[0].id;
 
   let parseResult;
+  let worksheets: string[] | undefined;
   try {
     if (ext === ".xlsx") {
-      const sheets = listWorksheets(buffer);
+      worksheets = listWorksheets(buffer);
       parseResult = parseXlsx(buffer, {
         worksheetName: worksheetName || undefined,
         headerRow,
@@ -134,7 +155,7 @@ export async function POST(request: NextRequest) {
   }
 
   await query(
-    `UPDATE import_batches SET status = 'previewing',
+    `UPDATE import_batches SET status = 'previewing', selected_worksheet = $4,
      column_mapping = $1,
      row_counts = $2
      WHERE id = $3`,
@@ -147,6 +168,7 @@ export async function POST(request: NextRequest) {
         duplicates: validation.totalDuplicates,
       }),
       batchId,
+      ext === ".xlsx" ? parseResult.worksheetName : null,
     ]
   );
 
@@ -154,14 +176,12 @@ export async function POST(request: NextRequest) {
     `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, after_values)
      VALUES ($1, $2, 'file_uploaded', 'import_batch', $3, $4)`,
     [
-      session.membership.company_id,
-      session.membership.id,
+      auth.company_id,
+      auth.membership_id,
       batchId,
       JSON.stringify({ filename: file.name, format: ext, rows: validation.rows.length }),
     ]
   );
-
-  const worksheets = ext === ".xlsx" ? listWorksheets(buffer) : undefined;
 
   return NextResponse.json({
     batchId,

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
+import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent, type AuthContext } from "@/lib/auth-helpers";
 import { alertProducts, resolveTarget } from "@/lib/products";
+import { ALERT_UUID, accessibleAlertIds, alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_ALERTS = 500;
 
 /** GET ?alert_id=… — products that apply to an alert (its own plus those from its groups). */
@@ -11,19 +11,20 @@ export async function GET(request: NextRequest) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
   const alertId = request.nextUrl.searchParams.get("alert_id") || "";
-  if (!UUID_RE.test(alertId)) return NextResponse.json({ error: "alert_id required" }, { status: 400 });
+  if (!ALERT_UUID.test(alertId)) return NextResponse.json({ error: "alert_id required" }, { status: 400 });
+  if (!(await canAccessAlert(auth, alertId))) return alertNotFound();
   const map = await alertProducts(auth.company_id, [alertId]);
   return NextResponse.json({ products: map.get(alertId) || [] });
 }
 
-/** Validates the body's alert_ids against the company. */
-async function readAlertIds(companyId: string, raw: unknown): Promise<string[] | { error: string }> {
+/** Validates the body's alert_ids against the caller's alert access. */
+async function readAlertIds(auth: AuthContext, raw: unknown): Promise<string[] | { error: string }> {
   if (!Array.isArray(raw) || raw.length === 0) return { error: "alert_ids required" };
   if (raw.length > MAX_ALERTS) return { error: `At most ${MAX_ALERTS} alerts at a time` };
-  const ids = [...new Set(raw.filter((x): x is string => typeof x === "string" && UUID_RE.test(x)))];
+  const ids = [...new Set(raw.filter((x): x is string => typeof x === "string" && ALERT_UUID.test(x)).map((x) => x.toLowerCase()))];
   if (ids.length !== raw.length) return { error: "Invalid alert id" };
-  const res = await query(`SELECT id FROM alerts WHERE company_id = $1 AND id = ANY($2::uuid[])`, [companyId, ids]);
-  if (res.rows.length !== ids.length) return { error: "Alert not found" };
+  const accessible = await accessibleAlertIds(auth, ids);
+  if (accessible.length !== ids.length) return { error: "Alert not found" };
   return ids;
 }
 
@@ -34,7 +35,7 @@ export async function POST(request: NextRequest) {
   if (!canEdit(auth.role)) return forbidden();
   const body = await request.json().catch(() => ({}));
 
-  const ids = await readAlertIds(auth.company_id, body.alert_ids);
+  const ids = await readAlertIds(auth, body.alert_ids);
   if (!Array.isArray(ids)) return NextResponse.json(ids, { status: 400 });
   const target = await resolveTarget(auth.company_id, body);
   if ("error" in target) return NextResponse.json(target, { status: 400 });
@@ -75,14 +76,14 @@ export async function DELETE(request: NextRequest) {
   if (!canEdit(auth.role)) return forbidden();
   const body = await request.json().catch(() => ({}));
 
-  const ids = await readAlertIds(auth.company_id, body.alert_ids);
+  const ids = await readAlertIds(auth, body.alert_ids);
   if (!Array.isArray(ids)) return NextResponse.json(ids, { status: 400 });
   const familyId = typeof body.family_id === "string" ? body.family_id : null;
   const productId = typeof body.product_id === "string" ? body.product_id : null;
   if (!!familyId === !!productId) return NextResponse.json({ error: "Choose one product family or one product" }, { status: 400 });
   const col = familyId ? "family_id" : "product_id";
   const targetId = (familyId || productId)!;
-  if (!UUID_RE.test(targetId)) return NextResponse.json({ error: "Product not found" }, { status: 400 });
+  if (!ALERT_UUID.test(targetId)) return NextResponse.json({ error: "Product not found" }, { status: 400 });
 
   await query(
     `DELETE FROM alert_product_links

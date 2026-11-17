@@ -3,7 +3,7 @@ import { getSessionFromRequest } from "@/lib/auth/request-session";
 import { recalculateAlert, recalculateCompanyAlerts, getAsOfDate } from "@/lib/scoring/recalculate";
 
 export async function POST(request: Request) {
-  const session = await getSessionFromRequest(request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (session.membership.role !== "company_admin") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getAuth, unauthorized } from "@/lib/auth-helpers";
+import { canAssign, getAuth, unauthorized, forbidden } from "@/lib/auth-helpers";
 
 export async function GET() {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!canAssign(auth.role)) return forbidden();
 
   const result = await query(
     `SELECT m.id, m.role, m.access_scope, m.state, m.joined_at,

@@ -4,7 +4,7 @@ import { createContext, useContext } from "react";
 
 export interface SessionInfo {
   user: { id: string; display_name: string; email: string; preferences?: { avatar?: string } & Record<string, unknown> };
-  membership: { id: string; company_id: string; role: string };
+  membership: { id: string; company_id: string; role: string; access_scope: string };
   company: { id: string; name: string; slug: string; settings?: { logo?: string; logo_dark?: string; icon?: string } & Record<string, unknown> };
   companies?: Array<{ id: string; name: string; slug: string; role?: string; logo?: string | null; icon?: string | null }>;
 }

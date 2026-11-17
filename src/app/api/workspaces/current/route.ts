@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, createAuditEvent } from "@/lib/auth-helpers";
+import { isValidWorkspaceTimeZone } from "@/lib/workspace-date";
 
 /** PATCH /api/workspaces/current { name?, time_zone? } — update the active workspace (admins only). */
 export async function PATCH(request: NextRequest) {
@@ -10,20 +11,19 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Only administrators can change workspace settings" }, { status: 403 });
   }
 
-  const { name, time_zone } = (await request.json().catch(() => ({}))) as { name?: string; time_zone?: string };
+  const { name, time_zone } = (await request.json().catch(() => null)) ?? {};
   const updates: string[] = [];
   const values: unknown[] = [];
 
   if (name !== undefined) {
+    if (typeof name !== "string") return NextResponse.json({ error: "Invalid workspace name" }, { status: 400 });
     const n = name.trim();
     if (n.length < 2 || n.length > 120) return NextResponse.json({ error: "Name must be 2–120 characters" }, { status: 400 });
     values.push(n);
     updates.push(`name = $${values.length}`);
   }
   if (time_zone !== undefined) {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: time_zone });
-    } catch {
+    if (!isValidWorkspaceTimeZone(time_zone)) {
       return NextResponse.json({ error: "Unknown time zone" }, { status: 400 });
     }
     values.push(time_zone);

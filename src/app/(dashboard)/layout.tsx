@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Toaster } from "@/components/layout/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { SessionContext, SessionRefreshContext, type SessionInfo } from "@/components/layout/session-context";
 
 /** Placeholder shown in the sidebar slot while the session loads. */
@@ -68,7 +69,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <TooltipProvider>
         <div className="min-h-screen bg-[var(--background)]">
           {session ? (
-            <Sidebar user={session.user} company={session.company} role={session.membership.role} companies={session.companies} />
+            <Sidebar
+              user={session.user}
+              company={session.company}
+              role={session.membership.role}
+              workspaceWide={hasCompanyWideAccess(session.membership.role, session.membership.access_scope)}
+              companies={session.companies}
+            />
           ) : (
             <SidebarSkeleton />
           )}

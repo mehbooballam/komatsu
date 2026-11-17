@@ -9,6 +9,8 @@ import { AlertProductsPicker, BulkProductsPicker } from "@/components/products/p
 import { UserAvatar } from "@/components/ui/brand";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ConfirmDialog, deleteAlertsRequest } from "@/components/alerts/confirm-dialog";
+import { useSessionInfo } from "@/components/layout/session-context";
+import { canAssign, hasCompanyWideAccess } from "@/lib/auth/permissions";
 
 export interface AlertRow {
   id: string;
@@ -154,14 +156,17 @@ function DeadlineCell({ date, days }: { date: string | null; days: number | null
 }
 
 /** Loads team members and groups once for the action menus. */
-export function useAssignables(enabled = true) {
+export function useAssignables(loadMembers = true, loadGroups = loadMembers) {
   const [members, setMembers] = useState<Member[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   useEffect(() => {
-    if (!enabled) return;
-    fetch("/api/teams/members").then((r) => (r.ok ? r.json() : { members: [] })).then((d) => setMembers(d.members || []));
-    fetch("/api/groups").then((r) => (r.ok ? r.json() : { groups: [] })).then((d) => setGroups(d.groups || []));
-  }, [enabled]);
+    if (loadMembers) {
+      fetch("/api/teams/members").then((r) => (r.ok ? r.json() : { members: [] })).then((d) => setMembers(d.members || []));
+    }
+    if (loadGroups) {
+      fetch("/api/groups").then((r) => (r.ok ? r.json() : { groups: [] })).then((d) => setGroups(d.groups || []));
+    }
+  }, [loadMembers, loadGroups]);
   return { members, groups, setGroups };
 }
 
@@ -387,10 +392,14 @@ export function AlertsTable({
   canDelete = false,
   emptyMessage,
 }: AlertsTableProps) {
+  const session = useSessionInfo();
+  const role = session?.membership.role ?? "";
+  const canAssignOwner = canEdit && canAssign(role);
+  const canGroup = canEdit && hasCompanyWideAccess(role, session?.membership.access_scope ?? "");
   const [pendingDelete, setPendingDelete] = useState<string[] | null>(null);
   const [ownerFor, setOwnerFor] = useState<string | null>(null);
   const [deadlineFor, setDeadlineFor] = useState<{ id: string; title: string } | null>(null);
-  const { members, groups, setGroups } = useAssignables(canEdit);
+  const { members, groups, setGroups } = useAssignables(canAssignOwner, canGroup);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [menuFor, setMenuFor] = useState<{ id: string; view: "menu" | "assign" | "group" | "products" } | null>(null);
   const [bulk, setBulk] = useState<"assign" | "group" | "products" | null>(null);
@@ -462,7 +471,7 @@ export function AlertsTable({
         <div className="sticky top-2 z-20 mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-white shadow-xl dark:bg-slate-800">
           <span className="text-sm font-semibold">{selected.size} selected</span>
           <span className="mx-1 h-5 w-px bg-white/20" />
-          <Popover open={bulk === "assign"} onOpenChange={(o) => setBulk(o ? "assign" : null)}>
+          {canAssignOwner && <Popover open={bulk === "assign"} onOpenChange={(o) => setBulk(o ? "assign" : null)}>
             <PopoverTrigger asChild>
               <button className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-sm font-medium hover:bg-white/20">
                 <UserPlus className="h-4 w-4" /> Assign
@@ -471,8 +480,8 @@ export function AlertsTable({
             <PopoverContent align="start" className="w-72 p-1.5">
               <MemberPicker members={members} onPick={(id) => doAssign(selectedIds, id)} />
             </PopoverContent>
-          </Popover>
-          <Popover open={bulk === "group"} onOpenChange={(o) => setBulk(o ? "group" : null)}>
+          </Popover>}
+          {canGroup && <Popover open={bulk === "group"} onOpenChange={(o) => setBulk(o ? "group" : null)}>
             <PopoverTrigger asChild>
               <button className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-sm font-medium hover:bg-white/20">
                 <Tag className="h-4 w-4" /> Add to group
@@ -481,7 +490,7 @@ export function AlertsTable({
             <PopoverContent align="start" className="w-72 p-1.5">
               <GroupPicker groups={groups} onPick={(id) => doGroup(selectedIds, id)} onCreate={(t, p) => doCreateGroup(selectedIds, t, p)} />
             </PopoverContent>
-          </Popover>
+          </Popover>}
           <Popover open={bulk === "products"} onOpenChange={(o) => setBulk(o ? "products" : null)}>
             <PopoverTrigger asChild>
               <button className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-sm font-medium hover:bg-white/20">
@@ -669,8 +678,8 @@ export function AlertsTable({
                           </span>
                         )}
                       </td>
-                      <td className="border-t border-slate-100 px-4 py-3 dark:border-slate-800" onClick={(e) => canEdit && e.stopPropagation()}>
-                        {canEdit ? (
+                      <td className="border-t border-slate-100 px-4 py-3 dark:border-slate-800" onClick={(e) => canAssignOwner && e.stopPropagation()}>
+                        {canAssignOwner ? (
                           <Popover open={ownerFor === a.id} onOpenChange={(o) => setOwnerFor(o ? a.id : null)}>
                             <PopoverTrigger asChild>
                               {a.owner_name ? (
@@ -735,12 +744,12 @@ export function AlertsTable({
                                 </button>
                                 {canEdit && (
                                   <>
-                                    <button onClick={() => setMenuFor({ id: a.id, view: "assign" })} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-slate-100 dark:hover:bg-slate-800">
+                                    {canAssignOwner && <button onClick={() => setMenuFor({ id: a.id, view: "assign" })} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-slate-100 dark:hover:bg-slate-800">
                                       <UserPlus className="h-4 w-4 text-slate-500" /> {a.owner_name ? "Reassign owner" : "Assign owner"}
-                                    </button>
-                                    <button onClick={() => setMenuFor({ id: a.id, view: "group" })} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-slate-100 dark:hover:bg-slate-800">
+                                    </button>}
+                                    {canGroup && <button onClick={() => setMenuFor({ id: a.id, view: "group" })} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-slate-100 dark:hover:bg-slate-800">
                                       <Tag className="h-4 w-4 text-slate-500" /> {a.group_title ? "Change group" : "Add to group"}
-                                    </button>
+                                    </button>}
                                     <button onClick={() => setMenuFor({ id: a.id, view: "products" })} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-slate-100 dark:hover:bg-slate-800">
                                       <Package className="h-4 w-4 text-slate-500" /> Attach products
                                     </button>

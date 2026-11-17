@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { AlertDrawer } from "@/components/alerts/alert-drawer";
 import { AlertsTable, type AlertRow, groupColor, createGroup, MAX_GROUP_DEPTH } from "@/components/alerts/alerts-table";
 import { useSessionInfo } from "@/components/layout/session-context";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 
 interface Option { value: string; label: string; count?: number }
 interface GroupOption extends Option { parent: string | null; depth: number; path: string[] }
@@ -133,7 +134,8 @@ export default function AlertsPage() {
   const searchParams = useSearchParams();
   const session = useSessionInfo();
   const role = session?.membership.role;
-  const canEdit = role !== "risk_owner";
+  const canEdit = !!role && role !== "risk_owner";
+  const workspaceWide = hasCompanyWideAccess(role ?? "", session?.membership.access_scope ?? "");
   const isAdmin = role === "company_admin";
   const canDelete = role === "company_admin" || role === "manager";
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
@@ -176,8 +178,9 @@ export default function AlertsPage() {
   }, [searchInput]);
 
   const loadFacets = useCallback(() => {
+    if (!workspaceWide) return;
     fetch("/api/alerts/facets").then((r) => (r.ok ? r.json() : null)).then((d) => d && setFacets(d));
-  }, []);
+  }, [workspaceWide]);
   useEffect(() => { loadFacets(); }, [loadFacets, refreshKey]);
 
   // Query string for the current page/sort/filters; refetches whenever it changes
@@ -380,7 +383,7 @@ export default function AlertsPage() {
         </div>
 
         {/* Group labels */}
-        <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+        {workspaceWide && <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-100 px-4 py-3 dark:border-slate-800">
           <span className="mr-1 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Groups</span>
           {groupChip(null, "All", undefined)}
           {trail.map((g) => (
@@ -415,11 +418,11 @@ export default function AlertsPage() {
                 <Plus className="h-3 w-3" /> {currentGroup && canNest ? "New sub-group" : "New group"}
               </button>
             ))}
-        </div>
+        </div>}
 
         {/* More filters */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-          <FacetSelect label="Stage" options={facets?.stages || []} selected={filters.stages} onChange={(v) => update({ stages: v })} />
+          {workspaceWide && <><FacetSelect label="Stage" options={facets?.stages || []} selected={filters.stages} onChange={(v) => update({ stages: v })} />
           <FacetSelect label="Country" options={facets?.countries || []} selected={filters.countries} onChange={(v) => update({ countries: v })} searchable />
           <FacetSelect
             label="Owner"
@@ -427,7 +430,7 @@ export default function AlertsPage() {
             options={[{ value: "unassigned", label: "Unassigned", count: facets?.unassigned_count }, ...(facets?.owners || [])]}
             selected={filters.owner ? [filters.owner] : []}
             onChange={(v) => update({ owner: v[0] ?? null })}
-          />
+          /></>}
           <FacetSelect
             label="Deadline"
             multi={false}
@@ -472,7 +475,7 @@ export default function AlertsPage() {
             sortBy={sortBy}
             sortDir={sortDir}
             onSort={handleSort}
-            onGroupClick={(id) => update({ group: id })}
+            onGroupClick={workspaceWide ? (id) => update({ group: id }) : undefined}
             emptyMessage={
               <div>
                 <p className="font-medium text-slate-700 dark:text-slate-300">No alerts match these filters</p>

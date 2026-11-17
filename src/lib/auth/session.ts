@@ -1,6 +1,7 @@
 import { query } from "@/lib/db";
 import crypto from "crypto";
 import { cookies } from "next/headers";
+import type { PoolClient } from "pg";
 
 const SESSION_COOKIE = "komatsu_session";
 const SESSION_EXPIRY_DAYS = 7;
@@ -17,37 +18,42 @@ export async function createSession(
   userId: string,
   companyId?: string
 ): Promise<string> {
+  const credentials = await storeSession(userId);
+  await setSessionCookies(credentials, companyId);
+  return credentials.token;
+}
+
+export async function storeSession(userId: string, client?: PoolClient) {
   const token = generateToken();
   const tokenHash = hashToken(token);
   const expiresAt = new Date(
     Date.now() + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000
   );
 
-  await query(
-    `INSERT INTO sessions (user_id, token, expires_at) VALUES ($1, $2, $3)`,
-    [userId, tokenHash, expiresAt.toISOString()]
-  );
+  const sql = `INSERT INTO sessions (user_id, token, expires_at) VALUES ($1, $2, $3)`;
+  const params = [userId, tokenHash, expiresAt.toISOString()];
+  if (client) await client.query(sql, params);
+  else await query(sql, params);
+  return { token, expiresAt };
+}
 
+export async function setSessionCookies(
+  { token, expiresAt }: { token: string; expiresAt: Date },
+  companyId?: string
+) {
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, token, {
+  const options = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    sameSite: "lax" as const,
     path: "/",
     expires: expiresAt,
-  });
+  };
 
+  cookieStore.set(SESSION_COOKIE, token, options);
   if (companyId) {
-    cookieStore.set("komatsu_company", companyId, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      expires: expiresAt,
-    });
+    cookieStore.set("komatsu_company", companyId, options);
   }
-
-  return token;
 }
 
 export interface SessionData {
@@ -81,15 +87,14 @@ export async function validateSession(): Promise<SessionData | null> {
 export async function destroySession(): Promise<void> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
+
+  // Clear the browser credentials first so logout still takes effect locally if
+  // the database is temporarily unavailable while revoking the server session.
+  cookieStore.delete(SESSION_COOKIE);
+  cookieStore.delete("komatsu_company");
+
   if (token) {
     const tokenHash = hashToken(token);
     await query(`DELETE FROM sessions WHERE token = $1`, [tokenHash]);
   }
-
-  cookieStore.delete(SESSION_COOKIE);
-  cookieStore.delete("komatsu_company");
-}
-
-export async function destroyAllUserSessions(userId: string): Promise<void> {
-  await query(`DELETE FROM sessions WHERE user_id = $1`, [userId]);
 }

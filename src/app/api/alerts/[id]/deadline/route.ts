@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getSessionFromRequest } from "@/lib/auth/request-session";
+import { alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 import { recalculateAlert, getAsOfDate } from "@/lib/scoring/recalculate";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(_request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const res = await query(
     `SELECT ad.*, u.display_name AS confirmed_by_name
@@ -23,11 +25,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const body = await request.json();
   const { date_value, kind, verification_state, applies_to, evidence } = body;
@@ -73,11 +76,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: alertId } = await params;
-  const session = await getSessionFromRequest(request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, alertId))) return alertNotFound();
 
   const body = await request.json();
   const { deadline_id, verification_state, lifecycle_state, kind } = body;
@@ -126,11 +130,13 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
 
-  values.push(deadline_id);
+  values.push(deadline_id, alertId, session.membership.company_id);
   const res = await query(
-    `UPDATE alert_deadlines SET ${updates.join(", ")} WHERE id = $${paramIdx} RETURNING *`,
+    `UPDATE alert_deadlines SET ${updates.join(", ")}
+     WHERE id = $${paramIdx} AND alert_id = $${paramIdx + 1} AND company_id = $${paramIdx + 2} RETURNING *`,
     values
   );
+  if (res.rows.length === 0) return NextResponse.json({ error: "Deadline not found" }, { status: 404 });
 
   await query(
     `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, before_values, after_values)

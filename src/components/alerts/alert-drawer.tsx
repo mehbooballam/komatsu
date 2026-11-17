@@ -16,6 +16,7 @@ import { describeEvent, type Refs } from "@/lib/audit-describe";
 import { Sentence, ChangeList, lowerFirst } from "@/components/audit/audit-entry";
 import { ProductPicker, ProductChip, setAlertProduct, type AttachedProduct, type ProductRef } from "@/components/products/product-picker";
 import { UserAvatar } from "@/components/ui/brand";
+import { canAssign, hasCompanyWideAccess } from "@/lib/auth/permissions";
 
 interface AlertDetail {
   alert: {
@@ -178,6 +179,9 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
   const [productsOpen, setProductsOpen] = useState(false);
 
   const canEdit = userRole !== "risk_owner";
+  const canAssignOwner = canAssign(userRole);
+  const canGroup = hasCompanyWideAccess(userRole, session?.membership.access_scope ?? "");
+  const canViewHistory = userRole !== "risk_owner";
 
   const load = useCallback(async () => {
     if (!alertId) return;
@@ -199,24 +203,26 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
     setNotesCount(null);
     setActiveTab("overview");
     load().finally(() => !cancelled && setLoading(false));
-    if (canEdit) {
+    if (canAssignOwner) {
       fetch("/api/teams/members").then((r) => (r.ok ? r.json() : { members: [] })).then((d) => !cancelled && setMembers(d.members || []));
+    }
+    if (canGroup) {
       fetch("/api/groups").then((r) => (r.ok ? r.json() : { groups: [] })).then((d) => !cancelled && setGroups(d.groups || []));
     }
     return () => {
       cancelled = true;
     };
-  }, [alertId, load, canEdit]);
+  }, [alertId, load, canAssignOwner, canGroup]);
 
   useEffect(() => {
-    if (activeTab !== "history" || !alertId || history) return;
+    if (!canViewHistory || activeTab !== "history" || !alertId || history) return;
     fetch(`/api/audit?entity_id=${alertId}&limit=50`)
       .then((r) => (r.ok ? r.json() : { events: [] }))
       .then((d) => {
         setHistoryRefs(d.refs || {});
         setHistory(d.events || []);
       });
-  }, [activeTab, alertId, history]);
+  }, [activeTab, alertId, canViewHistory, history]);
 
   useEffect(() => {
     if (!flash) return;
@@ -475,7 +481,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                   <>
                     <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-slate-400">
                       Owner
-                      {canEdit && <ChevronDown className="h-3 w-3" />}
+                      {canAssignOwner && <ChevronDown className="h-3 w-3" />}
                     </div>
                     <div className="mt-1 flex min-w-0 items-center gap-2">
                       {ownerName ? (
@@ -486,13 +492,13 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                         </span>
                       )}
                       <span className={`truncate text-sm font-semibold ${ownerName ? "text-slate-900 dark:text-white" : "text-slate-500"}`}>
-                        {ownerName || (canEdit ? "Assign owner" : "Unassigned")}
+                        {ownerName || (canAssignOwner ? "Assign owner" : "Unassigned")}
                       </span>
                     </div>
                     {viaGroup && <div className="text-[10px] text-slate-500">From its group</div>}
                   </>
                 );
-                if (!canEdit) return <div className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/60">{tile}</div>;
+                if (!canAssignOwner) return <div className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/60">{tile}</div>;
                 return (
                 <Popover open={assignOpen} onOpenChange={setAssignOpen}>
                   <PopoverTrigger asChild>
@@ -542,7 +548,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
             {/* Actions: one row on desktop, two by two on phones */}
             {canEdit && (
               <div aria-busy={busy} className={`mt-3 grid grid-cols-2 gap-2 transition-opacity sm:grid-cols-4 ${busy ? "pointer-events-none opacity-60" : ""}`}>
-                <Popover open={groupOpen} onOpenChange={setGroupOpen}>
+                {canGroup && <Popover open={groupOpen} onOpenChange={setGroupOpen}>
                   <PopoverTrigger asChild>
                     <span className="block"><ActionButton icon={FolderPlus} label={data.alert.group_title ? "Change group" : "Add to group"} active={groupOpen} /></span>
                   </PopoverTrigger>
@@ -559,7 +565,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                       </button>
                     )}
                   </PopoverContent>
-                </Popover>
+                </Popover>}
 
                 <Popover open={productsOpen} onOpenChange={setProductsOpen}>
                   <PopoverTrigger asChild>
@@ -601,7 +607,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
         {/* Tabs */}
         {data && (
           <div className="-mb-4 mt-4 flex gap-1">
-            {(["overview", "scoring", "details", "notes", "history"] as const).map((tab) => (
+            {(["overview", "scoring", "details", "notes", "history"] as const).filter((tab) => tab !== "history" || canViewHistory).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}

@@ -32,7 +32,7 @@ export default function MyRisksPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/alerts?assigned_to_me=true&limit=100&sort=priority&dir=desc")
+    fetch("/api/alerts?assigned_to_me=true&per_page=100&sort=priority&dir=desc")
       .then((res) => (res.ok ? res.json() : null))
       .catch((e) => {
         console.error("Failed to fetch assigned alerts", e);

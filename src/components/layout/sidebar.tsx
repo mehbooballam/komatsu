@@ -1,14 +1,15 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, AlertTriangle, FolderOpen, Package, Upload,
-  Users, History, Settings, Menu, X, ChevronDown, LogOut, User,
-  Shield, PanelLeftClose, PanelLeft, Moon, Sun, ChevronsUpDown, Check, Plus, KeyRound,
+  Users, History, Settings, Menu, ChevronDown, ChevronRight, LogOut, User,
+  Shield, Moon, Sun, ChevronsUpDown, Check, Plus, KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { workspaceHome } from "@/lib/auth/permissions";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UserAvatar, WorkspaceIcon, WorkspaceLogo } from "@/components/ui/brand";
 import {
@@ -22,6 +23,7 @@ interface SidebarProps {
   user: { display_name: string; email: string; preferences?: { avatar?: string } & Record<string, unknown> };
   company: { name: string; slug: string; settings?: Branding };
   role: string;
+  workspaceWide: boolean;
   companies?: Array<{ id: string; name: string; slug: string; role?: string; icon?: string | null }>;
 }
 
@@ -103,13 +105,20 @@ function WorkspaceSwitcher({
 
   const go = async (companyId: string) => {
     setBusy(true);
-    const res = await fetch("/api/workspaces/switch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ company_id: companyId }),
-    });
-    if (res.ok) window.location.assign("/dashboard");
-    else setBusy(false);
+    setError(null);
+    try {
+      const res = await fetch("/api/workspaces/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company_id: companyId }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Could not switch workspace");
+      window.location.assign(workspaceHome(body.membership?.role ?? "", body.membership?.access_scope ?? ""));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not switch workspace");
+      setBusy(false);
+    }
   };
 
   const create = async (e: React.FormEvent) => {
@@ -163,6 +172,7 @@ function WorkspaceSwitcher({
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-72 p-1.5">
         <p className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Workspaces</p>
+        {error && <p role="alert" className="px-2.5 pb-1.5 text-xs text-red-600">{error}</p>}
         {companies.map((c) => {
           const active = c.slug === current.slug;
           return (
@@ -198,7 +208,6 @@ function WorkspaceSwitcher({
                   placeholder="Workspace name, e.g. Komatsu Europe"
                   className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900"
                 />
-                {error && <p className="text-xs text-red-600">{error}</p>}
                 <div className="flex justify-end gap-1.5">
                   <button type="button" onClick={() => setCreating(false)} className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
                     Cancel
@@ -221,78 +230,71 @@ function WorkspaceSwitcher({
   );
 }
 
-export function Sidebar({ user, company, role, companies = [] }: SidebarProps) {
+function RiskOrbitBrand({ href, compact = false, onClick }: { href: string; compact?: boolean; onClick?: () => void }) {
+  return (
+    <Link
+      href={href}
+      aria-label="RiskOrbit by Infogenic — home"
+      className={cn("flex h-11 w-fit items-center", compact && "w-10 justify-center")}
+      onClick={onClick}
+    >
+      {compact ? (
+        <img src="/brand/riskorbit-mark.png" alt="" className="h-7 w-7 object-contain" />
+      ) : (
+        <span className="block w-fit">
+          <img src="/brand/riskorbit-logo.png" alt="" className="h-7 w-auto dark:hidden" />
+          <img src="/brand/riskorbit-logo-dark.png" alt="" className="hidden h-7 w-auto dark:block" />
+          <span className="mt-0.5 block whitespace-nowrap text-right text-[10.5px] font-medium tracking-wide text-[var(--sidebar-muted)]">
+            by <span className="font-semibold text-[var(--sidebar-gold)]">Infogenic</span>
+          </span>
+        </span>
+      )}
+    </Link>
+  );
+}
+
+export function Sidebar({ user, company, role, workspaceWide, companies = [] }: SidebarProps) {
   const pathname = usePathname();
+  const logoutForm = useRef<HTMLFormElement>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const { theme, toggle } = useTheme();
+  const homeHref = workspaceHome(role, workspaceWide ? "company" : "assigned");
+  const sidebarWidth = collapsed ? "64px" : "var(--sidebar-width)";
 
   // Let the main content follow the sidebar width.
   useEffect(() => {
-    document.documentElement.style.setProperty(
-      "--sidebar-current",
-      collapsed ? "var(--sidebar-collapsed-width)" : "var(--sidebar-width)"
-    );
-  }, [collapsed]);
+    document.documentElement.style.setProperty("--sidebar-current", sidebarWidth);
+  }, [sidebarWidth]);
 
   const sections = (role === "risk_owner" ? riskOwnerSections : navSections)
-    .map((s) => ({ ...s, items: s.items.filter((i) => i.roles.includes(role)) }))
+    .map((s) => ({
+      ...s,
+      items: s.items.filter((i) => i.roles.includes(role) && (workspaceWide || !["/dashboard", "/groups"].includes(i.href))),
+    }))
     .filter((s) => s.items.length > 0);
 
 
-  const renderContent = (isCollapsed: boolean, mobile = false) => (
-    <div className="flex h-full flex-col text-[var(--sidebar-fg)]">
-      {/* Top: collapse toggle + RiskOrbit brand */}
-      <div className={cn("flex items-center gap-2 border-b border-[var(--sidebar-border)] px-3 h-16", isCollapsed && "flex-col justify-center gap-2 h-auto py-3 px-0")}>
-        <button
-          type="button"
-          onClick={() => setCollapsed(!isCollapsed)}
-          className="hidden lg:flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--sidebar-muted)] hover:bg-[var(--sidebar-hover)] hover:text-[var(--sidebar-strong)]"
-          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {isCollapsed ? <PanelLeft className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}
-        </button>
-        {/* Product brand */}
-        <Link href="/dashboard" aria-label="RiskOrbit by Infogenic — home" className="flex min-w-0 flex-1 items-center" onClick={() => setMobileOpen(false)}>
-          {isCollapsed ? (
-            <img src="/brand/riskorbit-mark.png" alt="RiskOrbit" className="h-9 w-9 object-contain" />
-          ) : (
-            <span className="min-w-0">
-              <img src="/brand/riskorbit-logo.png" alt="RiskOrbit" className="h-7 w-auto dark:hidden" />
-              <img src="/brand/riskorbit-logo-dark.png" alt="RiskOrbit" className="hidden h-7 w-auto dark:block" />
-              <span className="mt-0.5 block pl-[2px] text-[10.5px] font-medium tracking-wide text-[var(--sidebar-muted)]">
-                by <span className="font-semibold text-[var(--sidebar-gold)]">Infogenic</span>
-              </span>
-            </span>
-          )}
-        </Link>
-        {mobile && (
-          <button
-            type="button"
-            onClick={() => setMobileOpen(false)}
-            aria-label="Close navigation"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--sidebar-muted)] hover:bg-[var(--sidebar-hover)] hover:text-[var(--sidebar-strong)]"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        )}
-      </div>
-
+  const renderContent = (isCollapsed: boolean) => (
+    <div className="flex min-h-0 flex-1 flex-col text-[var(--sidebar-fg)]">
       {/* Workspace (below the product brand) */}
       <div className={cn("px-3 pt-3", isCollapsed && "flex justify-center px-0")}>
         <WorkspaceSwitcher current={company} companies={companies} canCreate={role === "company_admin"} compact={isCollapsed} />
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5" aria-label="Main navigation">
+      <nav
+        className={cn("flex-1 overflow-y-auto", isCollapsed ? "space-y-3 px-0.5 py-3 [scrollbar-width:thin]" : "space-y-5 px-3 py-4")}
+        aria-label="Main navigation"
+      >
         {sections.map((section) => (
           <div key={section.title}>
-            {!isCollapsed && (
-              <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--sidebar-muted)]">
-                {section.title}
-              </p>
-            )}
+            <p className={cn(
+              "mb-1.5 font-semibold uppercase text-[var(--sidebar-muted)]",
+              isCollapsed ? "text-center text-[9px]" : "px-3 text-[10px] tracking-wider"
+            )}>
+              {isCollapsed && section.title === "Administration" ? "Admin" : section.title}
+            </p>
             <div className="space-y-0.5">
               {section.items.map((item) => {
                 const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
@@ -301,19 +303,19 @@ export function Sidebar({ user, company, role, companies = [] }: SidebarProps) {
                     key={item.href}
                     href={item.href}
                     className={cn(
-                      "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                      "group relative flex items-center rounded-lg py-2 text-sm font-medium transition-colors",
+                      isCollapsed ? "justify-center" : "gap-3 px-3",
                       isActive
                         ? "bg-[var(--sidebar-active-bg)] text-[var(--sidebar-active-fg)]"
                         : "hover:bg-[var(--sidebar-hover)] hover:text-[var(--sidebar-strong)]",
-                      isCollapsed && "justify-center px-0"
                     )}
                     title={isCollapsed ? item.label : undefined}
                     aria-current={isActive ? "page" : undefined}
                     onClick={() => setMobileOpen(false)}
                   >
                     {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-[var(--sidebar-gold)]" />}
-                    <item.icon className={cn("h-[18px] w-[18px] shrink-0", isActive ? "text-[var(--sidebar-accent)]" : "text-[var(--sidebar-muted)] group-hover:text-[var(--sidebar-strong)]")} />
-                    {!isCollapsed && <span>{item.label}</span>}
+                    <item.icon aria-hidden="true" className={cn("h-[18px] w-[18px] shrink-0", isActive ? "text-[var(--sidebar-accent)]" : "text-[var(--sidebar-muted)] group-hover:text-[var(--sidebar-strong)]")} />
+                    <span className={isCollapsed ? "sr-only" : undefined}>{item.label}</span>
                   </Link>
                 );
               })}
@@ -374,12 +376,8 @@ export function Sidebar({ user, company, role, companies = [] }: SidebarProps) {
               <Link href="/profile#password"><KeyRound className="mr-2 h-4 w-4" /> Change password</Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <form action="/api/auth/logout" method="POST" className="w-full">
-                <button type="submit" className="flex w-full items-center text-red-600">
-                  <LogOut className="mr-2 h-4 w-4" /> Sign out
-                </button>
-              </form>
+            <DropdownMenuItem className="text-red-600" onSelect={() => logoutForm.current?.requestSubmit()}>
+              <LogOut aria-hidden="true" /> Sign out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -389,37 +387,54 @@ export function Sidebar({ user, company, role, companies = [] }: SidebarProps) {
 
   return (
     <>
-      {/* Mobile top bar */}
-      <div className="lg:hidden fixed top-0 left-0 right-0 z-40 flex items-center gap-3 bg-[var(--sidebar-bg)] px-4 h-14 border-b border-[var(--sidebar-border)] shadow-sm">
+      <form ref={logoutForm} action="/api/auth/logout" method="POST" hidden />
+      {/* Tablet and mobile top bar */}
+      <div className="fixed inset-x-0 top-0 z-40 grid h-14 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--sidebar-border)] bg-[var(--sidebar-bg)] px-3 shadow-sm lg:hidden">
         <button
           type="button"
-          onClick={() => setMobileOpen(true)}
-          aria-label="Open navigation"
-          className="rounded-lg p-2 text-[var(--sidebar-strong)] hover:bg-[var(--sidebar-hover)]"
+          onClick={() => setMobileOpen((wasOpen) => !wasOpen)}
+          aria-controls="mobile-sidebar"
+          aria-expanded={mobileOpen}
+          aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
+          className="flex size-10 shrink-0 items-center justify-center rounded-full text-[var(--sidebar-strong)] hover:bg-[var(--sidebar-hover)] aria-expanded:bg-[var(--sidebar-hover)]"
         >
-          <Menu className="h-5 w-5" />
+          <Menu aria-hidden="true" className="h-5 w-5" />
         </button>
-        <WorkspaceIcon src={company.settings?.icon} name={company.name} className="h-7 w-7 rounded-lg" />
-        <span className="text-sm font-semibold text-[var(--sidebar-strong)]">{company.name}</span>
+        <RiskOrbitBrand href={homeHref} onClick={() => setMobileOpen(false)} />
       </div>
 
       {/* Mobile drawer */}
-      {mobileOpen && (
-        <div className="lg:hidden fixed inset-0 z-50">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-          <div className="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-[var(--sidebar-bg)] shadow-2xl">
-            {renderContent(false, true)}
+      <div id="mobile-sidebar" className="lg:hidden">
+        {mobileOpen && (
+          <div className="fixed inset-x-0 bottom-0 top-14 z-50">
+            <div aria-hidden="true" className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
+            <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-[var(--sidebar-bg)] shadow-2xl">
+              {renderContent(false)}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Desktop sidebar */}
       <aside
-        className={cn(
-          "hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 bg-[var(--sidebar-bg)] border-r border-[var(--sidebar-border)] transition-[width] duration-200",
-          collapsed ? "lg:w-[var(--sidebar-collapsed-width)]" : "lg:w-[var(--sidebar-width)]"
-        )}
+        id="desktop-sidebar"
+        className="hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 bg-[var(--sidebar-bg)] border-r border-[var(--sidebar-border)] transition-[width] duration-200"
+        style={{ width: sidebarWidth }}
       >
+        <div className="relative flex h-16 shrink-0 items-center justify-center border-b border-[var(--sidebar-border)]">
+          <RiskOrbitBrand href={homeHref} compact={collapsed} />
+          <button
+            type="button"
+            onClick={() => setCollapsed((wasCollapsed) => !wasCollapsed)}
+            aria-controls="desktop-sidebar"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="absolute -right-3 top-1/2 z-10 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full bg-[var(--sidebar-accent)] text-white shadow-sm ring-2 ring-[var(--sidebar-bg)] transition-colors hover:bg-[var(--primary)] dark:text-[var(--sidebar-bg)]"
+          >
+            <ChevronRight aria-hidden="true" className={cn("size-4 motion-safe:transition-transform", !collapsed && "rotate-180")} />
+          </button>
+        </div>
         {renderContent(collapsed)}
       </aside>
     </>

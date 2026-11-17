@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getAuth } from "@/lib/auth-helpers";
+import { getAuth, unauthorized, forbidden } from "@/lib/auth-helpers";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { loadGroupTree } from "@/lib/groups";
 
 /** Filter options with counts for the Alerts page (stages, countries, groups, owners, priorities). */
 export async function GET() {
   const auth = await getAuth();
-  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   const companyId = auth.company_id;
 
   const [stages, countries, groups, owners, priorities, ungrouped, unassigned] = await Promise.all([
@@ -20,7 +22,7 @@ export async function GET() {
       `SELECT g.code AS value, g.display_name AS label, COUNT(DISTINCT a.id)::int AS count
        FROM alert_geographies ag
        JOIN geographies g ON g.id = ag.geography_id
-       JOIN alerts a ON a.id = ag.alert_id AND a.archived_at IS NULL
+       JOIN alerts a ON a.id = ag.alert_id AND a.company_id = ag.company_id AND a.archived_at IS NULL
        WHERE ag.company_id = $1 AND ag.state <> 'rejected'
        GROUP BY g.code, g.display_name ORDER BY count DESC, label`,
       [companyId]
@@ -44,7 +46,7 @@ export async function GET() {
     query(`SELECT COUNT(*)::int AS count FROM alerts WHERE company_id = $1 AND archived_at IS NULL AND primary_group_id IS NULL`, [companyId]),
     query(
       `SELECT COUNT(*)::int AS count FROM alerts a
-       LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id
+       LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id AND rg.company_id = a.company_id
        WHERE a.company_id = $1 AND a.archived_at IS NULL AND COALESCE(a.direct_owner_membership_id, rg.owner_membership_id) IS NULL`,
       [companyId]
     ),

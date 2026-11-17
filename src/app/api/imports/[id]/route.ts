@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getSessionFromRequest } from "@/lib/auth/api-helper";
+import { canImport, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getSessionFromRequest();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await getAuth();
+  if (!auth) return unauthorized();
+  if (!canImport(auth.role)) return forbidden();
 
   const { id } = await params;
 
@@ -20,7 +19,7 @@ export async function GET(
      JOIN user_profiles u ON u.id = m.user_id
      JOIN feeds f ON f.id = ib.feed_id
      WHERE ib.id = $1 AND ib.company_id = $2`,
-    [id, session.membership.company_id]
+    [id, auth.company_id]
   );
 
   if (batchResult.rows.length === 0) {

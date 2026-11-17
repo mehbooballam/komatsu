@@ -1,23 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized } from "@/lib/auth-helpers";
+import { alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 
 import { MAX_NOTE_LENGTH, NOTE_SELECT } from "@/lib/notes";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-async function alertExists(companyId: string, id: string) {
-  if (!UUID_RE.test(id)) return false;
-  const res = await query(`SELECT 1 FROM alerts WHERE id = $1 AND company_id = $2`, [id, companyId]);
-  return res.rows.length > 0;
-}
 
 /** Notes on an alert: everyone's team notes plus the caller's own private notes, newest first. */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
   const { id } = await params;
-  if (!(await alertExists(auth.company_id, id))) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!(await canAccessAlert(auth, id))) return alertNotFound();
 
   const res = await query(
     `${NOTE_SELECT}
@@ -36,7 +29,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const auth = await getAuth();
   if (!auth) return unauthorized();
   const { id } = await params;
-  if (!(await alertExists(auth.company_id, id))) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!(await canAccessAlert(auth, id))) return alertNotFound();
 
   const payload = await request.json().catch(() => ({}));
   const body = typeof payload.body === "string" ? payload.body.trim() : "";

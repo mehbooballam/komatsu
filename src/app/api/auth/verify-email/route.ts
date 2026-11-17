@@ -3,10 +3,8 @@ import { query } from "@/lib/db";
 import crypto from "crypto";
 
 export async function GET(request: Request) {
+  const token = new URL(request.url).searchParams.get("token");
   try {
-    const url = new URL(request.url);
-    const token = url.searchParams.get("token");
-
     if (!token) {
       return NextResponse.json(
         { error: "Verification token is required" },

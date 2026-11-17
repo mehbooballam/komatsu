@@ -1,19 +1,21 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getSessionFromRequest } from "@/lib/auth/request-session";
+import { alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 import { recalculateAlert, getAsOfDate } from "@/lib/scoring/recalculate";
 import { VALID_RATINGS } from "@/lib/scoring/engine";
 import { normalizePolicy, MAX_TOTAL } from "@/lib/scoring/policy";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(_request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const res = await query(
     `SELECT sa.*, ad.date_value AS deadline_date, ad.kind AS deadline_kind
      FROM score_assessments sa
-     LEFT JOIN alert_deadlines ad ON ad.id = sa.selected_deadline_id
+     LEFT JOIN alert_deadlines ad ON ad.id = sa.selected_deadline_id AND ad.company_id = sa.company_id AND ad.alert_id = sa.alert_id
      WHERE sa.alert_id = $1 AND sa.company_id = $2 AND sa.is_latest = TRUE
      LIMIT 1`,
     [id, session.membership.company_id]
@@ -38,11 +40,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const body = await request.json();
   const { target, value, reason, expires_at } = body;
@@ -69,14 +72,6 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     }
   } else if (!VALID_RATINGS.includes(value as 1 | 3 | 6 | 9)) {
     return NextResponse.json({ error: "Value must be 1, 3, 6, or 9" }, { status: 400 });
-  }
-
-  const alertRes = await query(
-    `SELECT id, record_version FROM alerts WHERE id = $1 AND company_id = $2`,
-    [id, session.membership.company_id]
-  );
-  if (alertRes.rows.length === 0) {
-    return NextResponse.json({ error: "Alert not found" }, { status: 404 });
   }
 
   await query(
@@ -107,11 +102,12 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
 /** Clear the active override for one factor (DELETE /api/alerts/:id/score?target=market_access). */
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const target = new URL(request.url).searchParams.get("target");
   const validTargets = ["market_access", "cost_to_implement", "urgency", "total"];

@@ -1,36 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { cookies } from "next/headers";
-import crypto from "crypto";
+import { getAuth, unauthorized, forbidden, canEdit, canAssign } from "@/lib/auth-helpers";
+import { ALERT_UUID, alertNotFound, alertScopeSql, canAccessAlert } from "@/lib/alerts/access";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { loadGroupTree } from "@/lib/groups";
 import { alertProducts } from "@/lib/products";
 
-async function getAuth() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("komatsu_session")?.value;
-  if (!token) return null;
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-  const res = await query(
-    `SELECT s.user_id, m.id as membership_id, m.company_id, m.role, m.access_scope, c.time_zone
-     FROM sessions s
-     JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
-     JOIN companies c ON c.id = m.company_id
-     WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
-    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
-  );
-  return res.rows[0] || null;
-}
-
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await getAuth();
-  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth) return unauthorized();
 
   const { id } = await params;
   const companyId = auth.company_id;
+  if (!ALERT_UUID.test(id)) return alertNotFound();
+  const values: unknown[] = [id, companyId];
+  const scope = alertScopeSql(auth, values);
 
   const alertRes = await query(
     `SELECT
@@ -40,28 +27,20 @@ export async function GET(
        owner_u.display_name AS direct_owner_name,
        group_owner_u.display_name AS group_owner_name
      FROM alerts a
-     LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id
-     LEFT JOIN memberships owner_m ON owner_m.id = a.direct_owner_membership_id
+     LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id AND rg.company_id = a.company_id
+     LEFT JOIN memberships owner_m ON owner_m.id = a.direct_owner_membership_id AND owner_m.company_id = a.company_id
      LEFT JOIN user_profiles owner_u ON owner_u.id = owner_m.user_id
-     LEFT JOIN memberships group_owner_m ON group_owner_m.id = rg.owner_membership_id
+     LEFT JOIN memberships group_owner_m ON group_owner_m.id = rg.owner_membership_id AND group_owner_m.company_id = a.company_id
      LEFT JOIN user_profiles group_owner_u ON group_owner_u.id = group_owner_m.user_id
-     WHERE a.id = $1 AND a.company_id = $2`,
-    [id, companyId]
+     WHERE a.id = $1 AND a.company_id = $2 AND a.archived_at IS NULL AND ${scope}`,
+    values
   );
 
   if (alertRes.rows.length === 0) {
-    return NextResponse.json({ error: "Alert not found" }, { status: 404 });
+    return alertNotFound();
   }
 
   const alert = alertRes.rows[0];
-
-  // Risk owner access check
-  if (auth.role === "risk_owner") {
-    const effectiveOwner = alert.direct_owner_membership_id || alert.group_owner_id;
-    if (effectiveOwner !== auth.membership_id) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
-    }
-  }
 
   // Fetch related data in parallel
   const [assessment, deadlines, sourceRevisions, products, geographies, topics, tags, forecasts] =
@@ -91,8 +70,8 @@ export async function GET(
       query(
         `SELECT apl.*, pf.name AS family_name, pr.name AS product_name, pr.model_code
          FROM alert_product_links apl
-         LEFT JOIN product_families pf ON pf.id = apl.family_id
-         LEFT JOIN products pr ON pr.id = apl.product_id
+         LEFT JOIN product_families pf ON pf.id = apl.family_id AND pf.company_id = apl.company_id
+         LEFT JOIN products pr ON pr.id = apl.product_id AND pr.company_id = apl.company_id
          WHERE apl.alert_id = $1 AND apl.company_id = $2`,
         [id, companyId]
       ),
@@ -110,7 +89,7 @@ export async function GET(
       query(
         `SELECT at.*, tl.name AS tag_name, tl.color
          FROM alert_tags at
-         JOIN tag_labels tl ON tl.id = at.tag_id
+         JOIN tag_labels tl ON tl.id = at.tag_id AND tl.company_id = at.company_id
          WHERE at.alert_id = $1 AND at.company_id = $2`,
         [id, companyId]
       ),
@@ -215,14 +194,30 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await getAuth();
-  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (auth.role === "risk_owner") {
-    return NextResponse.json({ error: "Risk owners cannot edit alerts" }, { status: 403 });
-  }
+  if (!auth) return unauthorized();
+  if (!canEdit(auth.role)) return forbidden();
 
   const { id } = await params;
   const companyId = auth.company_id;
+  if (!(await canAccessAlert(auth, id))) return alertNotFound();
   const body = await request.json();
+
+  if (body.direct_owner_membership_id !== undefined) {
+    if (!canAssign(auth.role)) return forbidden();
+    const ownerId = body.direct_owner_membership_id;
+    if (ownerId !== null) {
+      const owner = await query(`SELECT 1 FROM memberships WHERE id::text = $1 AND company_id = $2 AND state = 'active'`, [ownerId, companyId]);
+      if (!owner.rowCount) return NextResponse.json({ error: "Member not found" }, { status: 400 });
+    }
+  }
+  if (body.primary_group_id !== undefined) {
+    if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
+    const groupId = body.primary_group_id;
+    if (groupId !== null) {
+      const group = await query(`SELECT 1 FROM regulation_groups WHERE id::text = $1 AND company_id = $2 AND state <> 'archived'`, [groupId, companyId]);
+      if (!group.rowCount) return NextResponse.json({ error: "Group not found" }, { status: 400 });
+    }
+  }
 
   const allowedFields = ["local_state", "primary_group_id", "direct_owner_membership_id"];
   const updates: string[] = [];
@@ -244,11 +239,14 @@ export async function PUT(
   // Record version check
   if (body.record_version !== undefined) {
     updates.push("record_version = record_version + 1");
+    const updateValues = [...values, id, companyId, body.record_version];
+    const scope = alertScopeSql(auth, updateValues);
     const result = await query(
-      `UPDATE alerts SET ${updates.join(", ")}
+      `UPDATE alerts a SET ${updates.join(", ")}
        WHERE id = $${paramIdx} AND company_id = $${paramIdx + 1} AND record_version = $${paramIdx + 2}
+         AND a.archived_at IS NULL AND ${scope}
        RETURNING *`,
-      [...values, id, companyId, body.record_version]
+      updateValues
     );
     if (result.rows.length === 0) {
       return NextResponse.json(

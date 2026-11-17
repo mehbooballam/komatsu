@@ -5,7 +5,6 @@ type Role = AuthMembership["role"];
 const EDITING_ROLES: Role[] = ["company_admin", "manager", "reviewer"];
 const IMPORT_ROLES: Role[] = ["company_admin", "manager"];
 const ADMIN_ROLES: Role[] = ["company_admin"];
-const ASSIGN_ROLES: Role[] = ["company_admin", "manager", "reviewer"];
 
 export function canManageCompany(role: Role): boolean {
   return ADMIN_ROLES.includes(role);
@@ -35,16 +34,16 @@ export function canManageGroups(role: Role): boolean {
   return IMPORT_ROLES.includes(role);
 }
 
-export function canAssign(role: Role): boolean {
-  return ASSIGN_ROLES.includes(role);
+export function canAssign(role: string): boolean {
+  return role === "company_admin" || role === "manager";
 }
 
-export function canViewAlerts(role: Role): boolean {
-  return true;
+export function canViewAlerts(role: string): boolean {
+  return role === "risk_owner" || role === "reviewer" || canViewAudit(role);
 }
 
-export function canViewAudit(role: Role): boolean {
-  return role !== "risk_owner";
+export function canViewAudit(role: string): boolean {
+  return role === "company_admin" || role === "manager";
 }
 
 export function canManageInventory(role: Role): boolean {
@@ -63,18 +62,19 @@ export function canRequestSourceReview(role: Role): boolean {
   return EDITING_ROLES.includes(role);
 }
 
-export function canViewDashboard(role: Role): boolean {
-  return true;
+export function canViewDashboard(role: string, scope: string): boolean {
+  return hasCompanyWideAccess(role, scope);
 }
 
 export function isRiskOwnerOnly(role: Role): boolean {
   return role === "risk_owner";
 }
 
-export function hasCompanyWideAccess(
-  role: Role,
-  scope: AuthMembership["access_scope"]
-): boolean {
-  if (role === "company_admin" || role === "manager") return true;
-  return scope === "company";
+export function hasCompanyWideAccess(role: string, scope: string): boolean {
+  return canViewAudit(role) || (role === "reviewer" && scope === "company");
+}
+
+export function workspaceHome(role: string, scope: string): string {
+  if (role === "risk_owner") return "/my-risks";
+  return canViewDashboard(role, scope) ? "/dashboard" : "/alerts";
 }

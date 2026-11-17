@@ -1,21 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getSessionFromRequest } from "@/lib/auth/api-helper";
+import { canImport, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await getAuth();
+  if (!auth) return unauthorized();
+  if (!canImport(auth.role)) return forbidden();
 
   const url = new URL(request.url);
-  const page = parseInt(url.searchParams.get("page") || "1");
-  const limit = Math.min(parseInt(url.searchParams.get("limit") || "20"), 100);
+  const page = Number(url.searchParams.get("page") ?? "1");
+  const requestedLimit = Number(url.searchParams.get("limit") ?? "20");
+  if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
+    return NextResponse.json({ error: "Page and limit must be positive integers" }, { status: 400 });
+  }
+  const limit = Math.min(requestedLimit, 100);
   const offset = (page - 1) * limit;
+  if (!Number.isSafeInteger(offset)) {
+    return NextResponse.json({ error: "Page is out of range" }, { status: 400 });
+  }
 
   const countResult = await query(
     `SELECT COUNT(*) FROM import_batches WHERE company_id = $1`,
-    [session.membership.company_id]
+    [auth.company_id]
   );
   const total = parseInt(countResult.rows[0].count);
 
@@ -32,7 +38,7 @@ export async function GET(request: NextRequest) {
      WHERE ib.company_id = $1
      ORDER BY ib.created_at DESC
      LIMIT $2 OFFSET $3`,
-    [session.membership.company_id, limit, offset]
+    [auth.company_id, limit, offset]
   );
 
   return NextResponse.json({

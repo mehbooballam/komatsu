@@ -1,9 +1,6 @@
-import crypto from "crypto";
+import { cookies } from "next/headers";
 import { query } from "@/lib/db";
-
-function hashToken(token: string): string {
-  return crypto.createHash("sha256").update(token).digest("hex");
-}
+import { hashToken } from "./session";
 
 export interface RequestSession {
   user: { id: string; email: string; display_name: string };
@@ -11,10 +8,10 @@ export interface RequestSession {
   company: { id: string; name: string; slug: string; time_zone: string; active_policy_id: string | null };
 }
 
-export async function getSessionFromRequest(request: Request): Promise<RequestSession | null> {
-  const cookieHeader = request.headers.get("cookie") ?? "";
-  const match = cookieHeader.match(/komatsu_session=([^;]+)/);
-  if (!match) return null;
+export async function getSessionFromRequest(): Promise<RequestSession | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get("komatsu_session")?.value;
+  if (!token) return null;
 
   const res = await query(
     `SELECT s.user_id, u.id AS uid, u.email, u.display_name,
@@ -22,11 +19,11 @@ export async function getSessionFromRequest(request: Request): Promise<RequestSe
             c.id AS cid, c.name AS cname, c.slug, c.time_zone, c.active_policy_id
      FROM sessions s
      JOIN user_profiles u ON u.id = s.user_id
-     LEFT JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
-     LEFT JOIN companies c ON c.id = m.company_id
+     JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
+     JOIN companies c ON c.id = m.company_id AND c.archived_at IS NULL
      WHERE s.token = $1 AND s.expires_at > NOW()
      ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
-    [hashToken(match[1]), cookieHeader.match(/komatsu_company=([^;]+)/)?.[1] ?? ""]
+    [hashToken(token), cookieStore.get("komatsu_company")?.value ?? ""]
   );
 
   if (res.rows.length === 0 || !res.rows[0].mid) return null;

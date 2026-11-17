@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
   if (!company_id) return NextResponse.json({ error: "company_id is required" }, { status: 400 });
 
   const member = await query(
-    `SELECT 1 FROM memberships m JOIN companies c ON c.id = m.company_id
+    `SELECT m.role, m.access_scope FROM memberships m JOIN companies c ON c.id = m.company_id
      WHERE m.user_id = $1 AND m.company_id = $2 AND m.state = 'active' AND c.archived_at IS NULL`,
     [auth.user_id, company_id]
   );
@@ -21,5 +21,5 @@ export async function POST(request: NextRequest) {
   }
 
   await setActiveWorkspace(company_id);
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, membership: member.rows[0] });
 }

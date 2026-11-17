@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { groupProducts, resolveTarget } from "@/lib/products";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -15,6 +16,7 @@ async function findGroup(companyId: string, id: string) {
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   const { id } = await params;
   if (!(await findGroup(auth.company_id, id))) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const map = await groupProducts(auth.company_id, [id]);
@@ -25,6 +27,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   if (!canEdit(auth.role)) return forbidden();
   const { id } = await params;
   if (!(await findGroup(auth.company_id, id))) return NextResponse.json({ error: "Group not found" }, { status: 404 });
@@ -47,6 +50,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   if (!canEdit(auth.role)) return forbidden();
   const { id } = await params;
   if (!(await findGroup(auth.company_id, id))) return NextResponse.json({ error: "Group not found" }, { status: 404 });

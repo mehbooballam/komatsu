@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { UUID_RE, canDeleteInventory, deleteInventory } from "@/lib/inventory";
 import { matchImportedProducts } from "@/lib/import/product-matching";
 
@@ -32,7 +33,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
-  if (!canEdit(auth.role)) return forbidden();
+  if (!canEdit(auth.role) || !hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   const { id } = await params;
   const family = await findFamily(auth.company_id, id);
   if (!family) return NextResponse.json({ error: "Not found" }, { status: 404 });

@@ -2,6 +2,7 @@ import { query } from "@/lib/db";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import crypto from "crypto";
+export { canAssign } from "@/lib/auth/permissions";
 
 export interface AuthContext {
   user_id: string;
@@ -24,7 +25,7 @@ export async function getAuth(): Promise<AuthContext | null> {
             c.time_zone, up.display_name, up.email
      FROM sessions s
      JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
-     JOIN companies c ON c.id = m.company_id
+     JOIN companies c ON c.id = m.company_id AND c.archived_at IS NULL
      JOIN user_profiles up ON up.id = s.user_id
      WHERE s.token = $1 AND s.expires_at > now()
      ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
@@ -52,11 +53,7 @@ export function canImport(role: string): boolean {
 }
 
 export function canEdit(role: string): boolean {
-  return role !== "risk_owner";
-}
-
-export function canAssign(role: string): boolean {
-  return role === "company_admin" || role === "manager";
+  return role === "company_admin" || role === "manager" || role === "reviewer";
 }
 
 export async function createAuditEvent(

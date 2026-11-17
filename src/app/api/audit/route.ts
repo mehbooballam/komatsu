@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getAuth, unauthorized } from "@/lib/auth-helpers";
+import { getAuth, unauthorized, forbidden } from "@/lib/auth-helpers";
+import { canViewAudit } from "@/lib/auth/permissions";
+import { alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -61,6 +63,11 @@ export async function GET(request: NextRequest) {
   const category = searchParams.get("category");
   const actorId = searchParams.get("actor_id");
   const entityId = searchParams.get("entity_id");
+  const workspaceAudit = canViewAudit(auth.role);
+  if (!workspaceAudit) {
+    if (auth.role !== "reviewer" || !entityId) return forbidden();
+    if (!(await canAccessAlert(auth, entityId))) return alertNotFound();
+  }
   const hideLogins = searchParams.get("hide_logins") === "true";
   const from = searchParams.get("from");
   const to = searchParams.get("to");
@@ -75,8 +82,11 @@ export async function GET(request: NextRequest) {
   if (actorId && UUID_RE.test(actorId)) { conditions.push(`ae.actor_membership_id = $${idx++}`); params.push(actorId); }
   if (hideLogins) conditions.push(`ae.action <> 'user.login'`);
   if (entityId) {
-    // Include events about the entity itself and events that reference it (e.g. group link/unlink of an alert).
-    conditions.push(`(ae.entity_id::text = $${idx} OR ae.after_values->>'alert_id' = $${idx} OR ae.before_values->>'alert_id' = $${idx})`);
+    // Workspace audit includes events about other entities that reference this alert.
+    // A reviewer sees only events recorded for the accessible alert itself.
+    conditions.push(workspaceAudit
+      ? `(ae.entity_id::text = $${idx} OR ae.after_values->>'alert_id' = $${idx} OR ae.before_values->>'alert_id' = $${idx})`
+      : `(ae.entity_type = 'alert' AND ae.entity_id = $${idx})`);
     idx++;
     params.push(entityId);
   }
@@ -98,13 +108,13 @@ export async function GET(request: NextRequest) {
       [...params, limit, offset]
     ),
     // People who appear in the log, for the "Who" filter
-    query(
+    workspaceAudit ? query(
       `SELECT DISTINCT m.id, up.display_name AS name
        FROM audit_events ae JOIN memberships m ON m.id = ae.actor_membership_id
        JOIN user_profiles up ON up.id = m.user_id
        WHERE ae.company_id = $1 ORDER BY name`,
       [auth.company_id]
-    ),
+    ) : { rows: [] },
   ]);
   const total = parseInt(countRes.rows[0].count);
 

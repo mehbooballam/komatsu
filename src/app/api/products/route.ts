@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { matchImportedProducts, unmatchedProductLabels } from "@/lib/import/product-matching";
 
 /**
@@ -10,32 +11,33 @@ import { matchImportedProducts, unmatchedProductLabels } from "@/lib/import/prod
 export async function GET() {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  const includeUsage = hasCompanyWideAccess(auth.role, auth.access_scope);
 
   const families = await query(
     `SELECT pf.id, pf.name, pf.description, pf.state, pf.created_at,
-            (SELECT COUNT(DISTINCT l.alert_id)::int FROM alert_product_links l
+            CASE WHEN $2 THEN (SELECT COUNT(DISTINCT l.alert_id)::int FROM alert_product_links l
              LEFT JOIN products p2 ON p2.id = l.product_id
-             WHERE l.state <> 'rejected' AND (l.family_id = pf.id OR p2.family_id = pf.id)) AS alert_count,
-            (SELECT COUNT(DISTINCT g.group_id)::int FROM group_product_links g
+             WHERE l.state <> 'rejected' AND (l.family_id = pf.id OR p2.family_id = pf.id)) END AS alert_count,
+            CASE WHEN $2 THEN (SELECT COUNT(DISTINCT g.group_id)::int FROM group_product_links g
              LEFT JOIN products p3 ON p3.id = g.product_id
-             WHERE g.family_id = pf.id OR p3.family_id = pf.id) AS group_count,
+             WHERE g.family_id = pf.id OR p3.family_id = pf.id) END AS group_count,
             COALESCE((
               SELECT json_agg(json_build_object(
                 'id', p.id, 'model_code', p.model_code, 'name', p.name, 'description', p.description,
                 'is_active', p.is_active,
-                'alert_count', (SELECT COUNT(DISTINCT alert_id) FROM alert_product_links WHERE product_id = p.id AND state <> 'rejected'),
-                'group_count', (SELECT COUNT(*) FROM group_product_links WHERE product_id = p.id)
+                'alert_count', CASE WHEN $2 THEN (SELECT COUNT(DISTINCT alert_id) FROM alert_product_links WHERE product_id = p.id AND state <> 'rejected') END,
+                'group_count', CASE WHEN $2 THEN (SELECT COUNT(*) FROM group_product_links WHERE product_id = p.id) END
               ) ORDER BY p.name)
               FROM products p WHERE p.family_id = pf.id
             ), '[]'::json) AS products
      FROM product_families pf
      WHERE pf.company_id = $1
      ORDER BY pf.name`,
-    [auth.company_id]
+    [auth.company_id, includeUsage]
   );
 
   // Product names used in imported alerts that the inventory doesn't have yet
-  const unmatched = await unmatchedProductLabels(auth.company_id);
+  const unmatched = includeUsage ? await unmatchedProductLabels(auth.company_id) : [];
   return NextResponse.json({ families: families.rows, unmatched });
 }
 
@@ -43,7 +45,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
-  if (!canEdit(auth.role)) return forbidden();
+  if (!canEdit(auth.role) || !hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
 
   const body = await request.json().catch(() => ({}));
   const name = typeof body.name === "string" ? body.name.trim() : "";
