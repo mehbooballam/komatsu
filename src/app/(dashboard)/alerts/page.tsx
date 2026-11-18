@@ -15,6 +15,8 @@ interface Option { value: string; label: string; count?: number }
 interface GroupOption extends Option { parent: string | null; depth: number; path: string[] }
 interface Facets {
   stages: Option[];
+  /** All continents, then countries with alerts */
+  continents?: Option[];
   countries: Option[];
   groups: GroupOption[];
   ungrouped_count: number;
@@ -61,6 +63,7 @@ function FacetSelect({
   onChange,
   multi = true,
   searchable = false,
+  leading,
 }: {
   label: string;
   options: Option[];
@@ -68,15 +71,40 @@ function FacetSelect({
   onChange: (v: string[]) => void;
   multi?: boolean;
   searchable?: boolean;
+  /** Options shown first under their own heading, then a divider (e.g. continents before countries) */
+  leading?: { title: string; optionsTitle: string; options: Option[] };
 }) {
   const [q, setQ] = useState("");
-  const shown = searchable && q ? options.filter((o) => o.label.toLowerCase().includes(q.toLowerCase())) : options;
+  const match = (o: Option) => !(searchable && q) || o.label.toLowerCase().includes(q.toLowerCase());
+  const shown = options.filter(match);
+  const shownLeading = leading ? leading.options.filter(match) : [];
   const active = selected.length > 0;
+  const allOptions = leading ? [...leading.options, ...options] : options;
   const summary = active
     ? selected.length === 1
-      ? options.find((o) => o.value === selected[0])?.label || selected[0]
+      ? allOptions.find((o) => o.value === selected[0])?.label || selected[0]
       : `${selected.length} selected`
     : null;
+  const renderOption = (o: Option) => {
+    const on = selected.includes(o.value);
+    const empty = o.count === 0 && !on;
+    return (
+      <button
+        key={o.value}
+        onClick={() => onChange(multi ? (on ? selected.filter((v) => v !== o.value) : [...selected, o.value]) : on ? [] : [o.value])}
+        className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800 ${empty ? "text-slate-400 dark:text-slate-500" : ""}`}
+      >
+        <span className={`flex h-4 w-4 items-center justify-center rounded ${multi ? "" : "rounded-full"} border ${on ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 dark:border-slate-600"}`}>
+          {on && <Check className="h-3 w-3" />}
+        </span>
+        <span className="flex-1 truncate">{o.label}</span>
+        {o.count !== undefined && <span className="text-xs tabular-nums text-slate-400">{o.count}</span>}
+      </button>
+    );
+  };
+  const heading = (t: string) => (
+    <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{t}</p>
+  );
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -101,24 +129,17 @@ function FacetSelect({
             className="mb-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900"
           />
         )}
-        <div className="max-h-64 overflow-y-auto">
-          {shown.length === 0 && <p className="px-2.5 py-3 text-sm text-slate-500">No options</p>}
-          {shown.map((o) => {
-            const on = selected.includes(o.value);
-            return (
-              <button
-                key={o.value}
-                onClick={() => onChange(multi ? (on ? selected.filter((v) => v !== o.value) : [...selected, o.value]) : on ? [] : [o.value])}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <span className={`flex h-4 w-4 items-center justify-center rounded ${multi ? "" : "rounded-full"} border ${on ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 dark:border-slate-600"}`}>
-                  {on && <Check className="h-3 w-3" />}
-                </span>
-                <span className="flex-1 truncate">{o.label}</span>
-                {o.count !== undefined && <span className="text-xs tabular-nums text-slate-400">{o.count}</span>}
-              </button>
-            );
-          })}
+        <div className="max-h-80 overflow-y-auto">
+          {shown.length === 0 && shownLeading.length === 0 && <p className="px-2.5 py-3 text-sm text-slate-500">No options</p>}
+          {shownLeading.length > 0 && leading && (
+            <>
+              {heading(leading.title)}
+              {shownLeading.map(renderOption)}
+              {shown.length > 0 && <div role="separator" className="my-1.5 border-t border-slate-200 dark:border-slate-700" />}
+              {shown.length > 0 && heading(leading.optionsTitle)}
+            </>
+          )}
+          {shown.map(renderOption)}
         </div>
         {active && (
           <button onClick={() => onChange([])} className="mt-1 w-full rounded-lg border-t border-slate-100 px-2.5 py-2 text-left text-xs font-medium text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800">
@@ -425,7 +446,14 @@ export default function AlertsPage() {
         {/* More filters */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">
           {workspaceWide && <><FacetSelect label="Stage" options={facets?.stages || []} selected={filters.stages} onChange={(v) => update({ stages: v })} />
-          <FacetSelect label="Country" options={facets?.countries || []} selected={filters.countries} onChange={(v) => update({ countries: v })} searchable />
+          <FacetSelect
+            label="Country"
+            leading={facets?.continents?.length ? { title: "Continents", optionsTitle: "Countries", options: facets.continents } : undefined}
+            options={facets?.countries || []}
+            selected={filters.countries}
+            onChange={(v) => update({ countries: v })}
+            searchable
+          />
           <FacetSelect
             label="Owner"
             multi={false}

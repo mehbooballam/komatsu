@@ -6,7 +6,7 @@ import { query, transaction } from "@/lib/db";
 
 function parseCountryCodes(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.length > 250 ||
-      !value.every((code): code is string => typeof code === "string" && /^[a-z]{2}$/i.test(code))) {
+      !value.every((code): code is string => typeof code === "string" && (/^[a-z]{2}$/i.test(code) || /^CONT-[A-Z]{2}$/i.test(code)))) {
     return null;
   }
   return [...new Set(value.map((code) => code.toUpperCase()))].sort();
@@ -20,7 +20,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!(await canAccessAlert(auth, id))) return alertNotFound();
 
   const [countries, mappings] = await Promise.all([
-    query(`SELECT code, display_name FROM geographies WHERE level = 'country' ORDER BY display_name, code`),
+    // Continents first (stored as level 'region'), then countries
+    query(`SELECT code, display_name, level FROM geographies WHERE level IN ('country', 'region') ORDER BY (level = 'region') DESC, display_name, code`),
     alertCountries(auth.company_id, id),
   ]);
   return NextResponse.json({ countries: countries.rows, ...alertCountryCodes(mappings) });
@@ -37,7 +38,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const countryCodes = parseCountryCodes(body?.country_codes);
   const expectedCodes = body?.expected_country_codes === undefined ? undefined : parseCountryCodes(body.expected_country_codes);
   if (!countryCodes || expectedCodes === null) {
-    return NextResponse.json({ error: "Expected lists of two-letter country codes." }, { status: 400 });
+    return NextResponse.json({ error: "Expected lists of country or continent codes." }, { status: 400 });
   }
 
   const result = await transaction((client) => saveManualAlertCountries(client, auth, id, countryCodes, expectedCodes));

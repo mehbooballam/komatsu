@@ -27,8 +27,8 @@ export async function alertCountries(companyId: string, alertId: string, runQuer
   const result = await runQuery(
     `SELECT g.code, g.display_name, ag.state, ag.source_evidence
      FROM alert_geographies ag JOIN geographies g ON g.id = ag.geography_id
-     WHERE ag.company_id = $1 AND ag.alert_id = $2 AND ag.state <> 'rejected' AND g.level = 'country'
-     ORDER BY g.display_name, g.code`,
+     WHERE ag.company_id = $1 AND ag.alert_id = $2 AND ag.state <> 'rejected' AND g.level IN ('country', 'region')
+     ORDER BY g.level DESC, g.display_name, g.code`,
     [companyId, alertId]
   );
   return result.rows;
@@ -62,15 +62,15 @@ export async function saveManualAlertCountries(
   }
 
   const countries = await client.query<{ id: string }>(
-    `SELECT id FROM geographies WHERE level = 'country' AND code = ANY($1::text[])`,
+    `SELECT id FROM geographies WHERE level IN ('country', 'region') AND code = ANY($1::text[])`,
     [countryCodes]
   );
-  if (countries.rows.length !== countryCodes.length) return { error: "Select countries from the list.", status: 400 } as const;
+  if (countries.rows.length !== countryCodes.length) return { error: "Select continents or countries from the list.", status: 400 } as const;
 
   const geographyIds = countries.rows.map((row) => row.id);
   const removed = await client.query(
     `DELETE FROM alert_geographies ag USING geographies g
-     WHERE ag.geography_id = g.id AND g.level = 'country'
+     WHERE ag.geography_id = g.id AND g.level IN ('country', 'region')
        AND ag.company_id = $1 AND ag.alert_id = $2 AND ag.state = 'confirmed'
        AND ag.source_evidence = $3 AND NOT (ag.geography_id = ANY($4::uuid[]))`,
     [companyId, alertId, MANUAL_COUNTRY_EVIDENCE, geographyIds]

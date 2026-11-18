@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { MapPin } from "lucide-react";
+import { MapPin, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface MappingOptions {
-  countries: Array<{ code: string; display_name: string }>;
+  /** Continents (level "region") first, then countries */
+  countries: Array<{ code: string; display_name: string; level?: string }>;
   manual_codes: string[];
   automatic_codes: string[];
 }
@@ -17,20 +18,33 @@ interface AlertCountryMappingProps {
   alertTitle: string;
   jurisdiction?: string | null;
   editing?: boolean;
+  /** Small text-style trigger (used under already-mapped locations) */
+  compact?: boolean;
   onSaved: (message: string) => void;
 }
 
-export function AlertCountryMapping({ alertId, alertTitle, jurisdiction, editing, onSaved }: AlertCountryMappingProps) {
+export function AlertCountryMapping({ alertId, alertTitle, jurisdiction, editing, compact, onSaved }: AlertCountryMappingProps) {
   const [open, setOpen] = useState(false);
 
   return (
     <span className="inline-flex" onClick={(event) => event.stopPropagation()}>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <Button type="button" variant="outline" size="sm">
-            <MapPin aria-hidden="true" />
-            {editing ? "Edit country mapping" : "Map to country"}
-          </Button>
+          {compact ? (
+            <button
+              type="button"
+              aria-label={`Edit locations for ${alertTitle}`}
+              title="Edit location"
+              className="inline-flex items-center rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-blue-700 dark:hover:bg-slate-800 dark:hover:text-blue-300"
+            >
+              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          ) : (
+            <Button type="button" variant="outline" size="sm">
+              <MapPin aria-hidden="true" />
+              {editing ? "Edit location" : "Map to location"}
+            </Button>
+          )}
         </PopoverTrigger>
         {open && (
           <CountryMappingForm
@@ -84,10 +98,23 @@ function CountryMappingForm({ alertId, alertTitle, jurisdiction, onClose, onSave
   const matches = options?.countries.filter((country) =>
     country.display_name.toLowerCase().includes(searchTerm) || country.code.toLowerCase() === searchTerm
   ) ?? [];
+  const continentMatches = matches.filter((m) => m.level === "region");
+  const countryMatches = matches.filter((m) => m.level !== "region");
   const automaticallyMapped = new Set(options?.automatic_codes);
   const hasChanges = options !== null && (
     selected.size !== options.manual_codes.length || options.manual_codes.some((code) => !selected.has(code))
   );
+
+  function renderOption({ code, display_name, level }: { code: string; display_name: string; level?: string }) {
+    const automatic = automaticallyMapped.has(code);
+    return (
+      <label key={code} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--accent)]">
+        <input type="checkbox" checked={automatic || selected.has(code)} disabled={automatic} onChange={(event) => changeSelection(code, event.target.checked)} />
+        <span className={`flex-1 ${level === "region" ? "font-medium" : ""}`}>{display_name}</span>
+        <span className="shrink-0 text-xs text-[var(--muted-foreground)]">{automatic ? "Already mapped" : level === "region" ? "Continent" : code}</span>
+      </label>
+    );
+  }
 
   function changeSelection(code: string, checked: boolean) {
     setSelected((previous) => {
@@ -114,7 +141,7 @@ function CountryMappingForm({ alertId, alertTitle, jurisdiction, onClose, onSave
         const body = await response.json().catch(() => null);
         throw new Error(body?.error || "Could not save the country mapping.");
       }
-      onSaved(selected.size ? "Country mapping saved" : "Manual country mapping removed");
+      onSaved(selected.size ? "Location mapping saved" : "Manual location mapping removed");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the country mapping.");
     } finally {
@@ -134,8 +161,8 @@ function CountryMappingForm({ alertId, alertTitle, jurisdiction, onClose, onSave
         {jurisdiction && <p className="break-words text-xs text-[var(--muted-foreground)]">Imported jurisdiction: {jurisdiction}</p>}
         <Input
           type="search"
-          aria-label="Search countries"
-          placeholder="Search countries"
+          aria-label="Search continents or countries"
+          placeholder="Search continents or countries"
           className="h-8 text-xs"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -145,19 +172,20 @@ function CountryMappingForm({ alertId, alertTitle, jurisdiction, onClose, onSave
         {options && (
           <>
             <p aria-live="polite" className="text-xs text-[var(--muted-foreground)]">{selected.size} selected</p>
-            <fieldset disabled={saving || needsReload} className="max-h-40 overflow-y-auto rounded-lg border border-[var(--border)] p-1">
-              <legend className="sr-only">Countries</legend>
-              {matches.length === 0 && <p className="px-2 py-3 text-sm text-[var(--muted-foreground)]">No countries found.</p>}
-              {matches.map(({ code, display_name }) => {
-                const automatic = automaticallyMapped.has(code);
-                return (
-                  <label key={code} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--accent)]">
-                    <input type="checkbox" checked={automatic || selected.has(code)} disabled={automatic} onChange={(event) => changeSelection(code, event.target.checked)} />
-                    <span className="flex-1">{display_name}</span>
-                    <span className="shrink-0 text-xs text-[var(--muted-foreground)]">{automatic ? "Already mapped" : code}</span>
-                  </label>
-                );
-              })}
+            <fieldset disabled={saving || needsReload} className="max-h-56 overflow-y-auto rounded-lg border border-[var(--border)] p-1">
+              <legend className="sr-only">Continents and countries</legend>
+              {matches.length === 0 && <p className="px-2 py-3 text-sm text-[var(--muted-foreground)]">Nothing found.</p>}
+              {continentMatches.length > 0 && (
+                <>
+                  <p className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Continents</p>
+                  {continentMatches.map(renderOption)}
+                  {countryMatches.length > 0 && <div role="separator" className="mx-1 my-1.5 border-t border-[var(--border)]" />}
+                </>
+              )}
+              {countryMatches.length > 0 && continentMatches.length > 0 && (
+                <p className="px-2 pb-0.5 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Countries</p>
+              )}
+              {countryMatches.map(renderOption)}
             </fieldset>
           </>
         )}

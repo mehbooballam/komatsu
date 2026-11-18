@@ -3,6 +3,7 @@ import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden } from "@/lib/auth-helpers";
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { loadGroupTree } from "@/lib/groups";
+import { CONTINENTS, CONTINENT_PREFIX, continentOfGeography } from "@/lib/geo/continents";
 
 /** Filter options with counts for the Alerts page (stages, countries, groups, owners, priorities). */
 export async function GET() {
@@ -11,7 +12,7 @@ export async function GET() {
   if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   const companyId = auth.company_id;
 
-  const [stages, countries, groups, owners, priorities, ungrouped, unassigned] = await Promise.all([
+  const [stages, countries, groups, owners, priorities, ungrouped, unassigned, countryLinks] = await Promise.all([
     query(
       `SELECT stage AS value, COUNT(*)::int AS count FROM alerts
        WHERE company_id = $1 AND archived_at IS NULL AND stage IS NOT NULL AND stage <> ''
@@ -31,7 +32,7 @@ export async function GET() {
        WHERE a.company_id = $1 AND a.archived_at IS NULL
          AND NOT EXISTS (
            SELECT 1 FROM alert_geographies ag
-           JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
+           JOIN geographies g ON g.id = ag.geography_id AND g.level IN ('country', 'region')
            WHERE ag.alert_id = a.id AND ag.company_id = a.company_id AND ag.state <> 'rejected'
          )
        ORDER BY count DESC, label`,
@@ -60,10 +61,30 @@ export async function GET() {
        WHERE a.company_id = $1 AND a.archived_at IS NULL AND COALESCE(a.direct_owner_membership_id, rg.owner_membership_id) IS NULL`,
       [companyId]
     ),
+    // Alert ↔ country/continent pairs, rolled up into continents below
+    query(
+      `SELECT DISTINCT ag.alert_id, g.code
+       FROM alert_geographies ag
+       JOIN geographies g ON g.id = ag.geography_id AND g.level IN ('country', 'region')
+       JOIN alerts a ON a.id = ag.alert_id AND a.company_id = ag.company_id AND a.archived_at IS NULL
+       WHERE ag.company_id = $1 AND ag.state <> 'rejected'`,
+      [companyId]
+    ),
   ]);
+
+  // Distinct alerts per continent (an alert in France and Germany counts once for Europe)
+  const perContinent = new Map<string, Set<string>>();
+  for (const r of countryLinks.rows) {
+    const c = continentOfGeography(r.code);
+    if (!c) continue;
+    if (!perContinent.has(c)) perContinent.set(c, new Set());
+    perContinent.get(c)!.add(r.alert_id);
+  }
 
   return NextResponse.json({
     stages: stages.rows.map((r) => ({ value: r.value, label: r.value, count: r.count })),
+    // All continents first (even with no alerts), then the countries that have alerts
+    continents: CONTINENTS.map((c) => ({ value: `${CONTINENT_PREFIX}${c.code}`, label: c.name, count: perContinent.get(c.code)?.size ?? 0 })),
     countries: countries.rows,
     // count includes alerts in sub-groups
     groups: groups.map((g) => ({

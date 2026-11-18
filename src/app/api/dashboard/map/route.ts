@@ -55,8 +55,9 @@ export async function GET(request: NextRequest) {
      LEFT JOIN alert_active_projections p ON p.alert_id = a.id AND p.company_id = a.company_id
      WHERE a.company_id = $1 AND a.archived_at IS NULL${filterClauses}
        AND NOT EXISTS (
+         -- Mapped to a country, or to a whole continent (level 'region')
          SELECT 1 FROM alert_geographies ag
-         JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
+         JOIN geographies g ON g.id = ag.geography_id AND g.level IN ('country', 'region')
          WHERE ag.alert_id = a.id AND ag.company_id = a.company_id AND ag.state <> 'rejected'
        )`,
     params

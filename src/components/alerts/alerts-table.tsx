@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
-  MoreHorizontal, Eye, UserPlus, Tag, Check, ChevronUp, ChevronDown, Loader2, X, Plus, CalendarClock, AlertTriangle, Trash2, ArrowUp, CalendarPlus, Package,
+  MoreHorizontal, Eye, UserPlus, Tag, Check, ChevronUp, ChevronDown, Loader2, X, Plus, CalendarClock, AlertTriangle, Trash2, ArrowUp, CalendarPlus, Package, MapPin,
 } from "lucide-react";
 import { DeadlineDialog } from "@/components/alerts/deadline-dialog";
 import { AlertCountryMapping } from "@/components/alerts/alert-country-mapping";
@@ -31,6 +31,8 @@ export interface AlertRow {
   owner_name: string | null;
   owner_avatar?: string | null;
   geographies?: string[];
+  /** Locations with their source: manual = mapped by a person, otherwise from the import file */
+  geography_details?: Array<{ name: string; manual: boolean; continent: boolean }>;
   /** Band from the numeric score alone (before escalation rules). */
   score_band?: string | null;
   escalation_reasons?: Array<{ description: string; resulting_band: string }> | null;
@@ -133,6 +135,43 @@ export function StageBadge({ stage }: { stage: string | null | undefined }) {
       <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
       {stage}
     </span>
+  );
+}
+
+/**
+ * Mapped locations. Imported ones are plain text; ones a person mapped by hand
+ * are shown as small green chips with a pin, so the two are easy to tell apart.
+ */
+function GeographyList({ items }: { items: Array<{ name: string; manual: boolean; continent: boolean }> }) {
+  const MAX = 3;
+  const shown = items.slice(0, MAX);
+  const rest = items.length - shown.length;
+  return (
+    <div className="flex max-w-[190px] flex-wrap items-center gap-1 text-[13px] text-slate-700 dark:text-slate-300">
+      {shown.map((g, i) =>
+        g.manual ? (
+          <span
+            key={`${g.name}-${i}`}
+            title={`${g.name} — mapped manually by your team`}
+            className="inline-flex max-w-full items-center gap-0.5 rounded-md bg-blue-50 px-1.5 py-px text-[12px] font-medium text-blue-700 ring-1 ring-blue-200 dark:bg-blue-500/10 dark:text-blue-300 dark:ring-blue-500/30"
+          >
+            <MapPin className="h-3 w-3 shrink-0" aria-hidden />
+            <span className="truncate">{g.name}</span>
+            <span className="sr-only">(mapped manually)</span>
+          </span>
+        ) : (
+          <span key={`${g.name}-${i}`} title={`${g.name} — from the import file`} className="max-w-full truncate">
+            {g.name}
+            {i < shown.length - 1 && !shown[i + 1].manual ? "," : ""}
+          </span>
+        )
+      )}
+      {rest > 0 && (
+        <span className="text-[11px] text-slate-400" title={items.slice(MAX).map((g) => `${g.name}${g.manual ? " (manual)" : ""}`).join(", ")}>
+          +{rest}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -618,9 +657,13 @@ export function AlertsTable({
                       </td>
                       {!compact && (
                         <td className="border-t border-slate-100 px-4 py-3 dark:border-slate-800">
-                          <div className="max-w-[160px] truncate text-[13px] text-slate-700 dark:text-slate-300">
-                            {a.geographies && a.geographies.length > 0 ? a.geographies.join(", ") : <span className="text-slate-400">{a.jurisdiction_raw || "—"}</span>}
-                          </div>
+                          {a.geography_details && a.geography_details.length > 0 ? (
+                            <GeographyList items={a.geography_details} />
+                          ) : a.geographies && a.geographies.length > 0 ? (
+                            <div className="max-w-[160px] truncate text-[13px] text-slate-700 dark:text-slate-300">{a.geographies.join(", ")}</div>
+                          ) : (
+                            <div className="max-w-[160px] truncate text-[13px] text-slate-400">{a.jurisdiction_raw || "—"}</div>
+                          )}
                           {canEdit && role && a.geographies?.length === 0 && (
                             <div className="mt-1.5">
                               <AlertCountryMapping

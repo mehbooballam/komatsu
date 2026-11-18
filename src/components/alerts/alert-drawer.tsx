@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  X, ExternalLink, Clock, ChevronDown, Tag, FileText, AlertTriangle, Loader2,
+  X, ExternalLink, Clock, ChevronDown, MapPin, Tag, FileText, AlertTriangle, Loader2,
   SlidersHorizontal, Link2, Package, FolderPlus, Check, UserPlus, UserMinus,
   CalendarCheck, Globe2, History, CheckCircle2, FolderMinus,
 } from "lucide-react";
@@ -351,7 +351,9 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
   const nextDeadline = [...outstanding].sort((a, b) => a.date_value.localeCompare(b.date_value))[0];
   const ownerId = data?.alert.ownership.direct_owner_id ?? null;
   const totalOverride = data?.active_overrides.find((o) => o.target === "total") ?? null;
-  const mappedCountries = data?.geographies.filter((g) => g.level === "country" && g.state !== "rejected") ?? [];
+  // Countries and whole continents (level "region"), continents first
+  const mappedCountries = (data?.geographies.filter((g) => (g.level === "country" || g.level === "region") && g.state !== "rejected") ?? [])
+    .sort((a, b) => Number(b.level === "region") - Number(a.level === "region") || a.display_name.localeCompare(b.display_name));
   const hasManualMapping = mappedCountries.some((g) => g.state === "confirmed" && g.source_evidence === "manual");
 
   const scoreFactors = Object.fromEntries(
@@ -687,13 +689,53 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                         <span className="font-medium">Imported jurisdiction:</span> {data.alert.jurisdiction_raw}
                       </p>
                     )}
-                    <div className="flex flex-wrap gap-1.5">
-                      {mappedCountries.map((g) => (
-                        <span key={g.code} className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">{g.display_name}</span>
-                      ))}
-                      {mappedCountries.length === 0 && <span className="text-sm text-slate-500">No country mapped.</span>}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {mappedCountries.map((g) => {
+                        const manual = g.state === "confirmed" && g.source_evidence === "manual";
+                        return manual ? (
+                          <span
+                            key={g.code}
+                            title={`${g.display_name} — mapped manually by your team`}
+                            className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-200 dark:bg-blue-500/10 dark:text-blue-300 dark:ring-blue-500/30"
+                          >
+                            <MapPin className="h-3 w-3" aria-hidden /> {g.display_name}
+                            <span className="sr-only">(mapped manually)</span>
+                          </span>
+                        ) : (
+                          <span
+                            key={g.code}
+                            title={`${g.display_name} — from the import file`}
+                            className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                          >
+                            {g.display_name}
+                          </span>
+                        );
+                      })}
+                      {mappedCountries.length === 0 && <span className="text-sm text-slate-500">No location mapped.</span>}
+                      {/* Edit sits at the end of the locations */}
+                      {session && canEdit && mappedCountries.length > 0 && (
+                        <AlertCountryMapping
+                          alertId={data.alert.id}
+                          alertTitle={data.alert.title}
+                          jurisdiction={data.alert.jurisdiction_raw}
+                          editing
+                          compact
+                          onSaved={(text) => {
+                            void load();
+                            setHistory(null);
+                            setFlash({ ok: true, text });
+                            onChanged?.();
+                          }}
+                        />
+                      )}
                     </div>
-                    {session && canEdit && (mappedCountries.length === 0 || hasManualMapping) && (
+                    {mappedCountries.length > 0 && (
+                      <p className="mt-2 flex items-center gap-3 text-[11px] text-slate-500">
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600" /> From import</span>
+                        <span className="inline-flex items-center gap-1"><MapPin className="h-3 w-3 text-blue-600 dark:text-blue-400" aria-hidden /> Mapped manually</span>
+                      </p>
+                    )}
+                    {session && canEdit && mappedCountries.length === 0 && (
                       <div className="mt-2">
                         <AlertCountryMapping
                           alertId={data.alert.id}

@@ -5,6 +5,7 @@ import { alertScopeSql } from "@/lib/alerts/access";
 import { getWorkspaceDate } from "@/lib/workspace-date";
 import { loadGroupTree, inGroupSubtreeSql } from "@/lib/groups";
 import { alertProducts } from "@/lib/products";
+import { CONTINENT_PREFIX, continentGeoCode, countriesIn } from "@/lib/geo/continents";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -52,20 +53,34 @@ export async function GET(request: NextRequest) {
   // Filter: geography
   const geographies = list("geography");
   if (geographies.length) {
+    // Location links: countries, or a whole continent (level 'region', code CONT-XX)
     const countryLinks = `
       SELECT 1 FROM alert_geographies ag
-      JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
+      JOIN geographies g ON g.id = ag.geography_id AND g.level IN ('country', 'region')
       WHERE ag.alert_id = a.id AND ag.company_id = a.company_id AND ag.state <> 'rejected'`;
     const geographyFilters: string[] = [];
     if (geographies.includes("unmapped")) geographyFilters.push(`NOT EXISTS (${countryLinks})`);
 
-    const countryCodes = geographies.filter((code) => code !== "unmapped");
+    // "continent:EU" expands to every country in that continent, plus alerts mapped to Europe itself
+    const countryCodes = [
+      ...new Set(
+        geographies
+          .filter((code) => code !== "unmapped")
+          .flatMap((code) => {
+            if (!code.startsWith(CONTINENT_PREFIX)) return [code];
+            const continent = code.slice(CONTINENT_PREFIX.length);
+            const members = countriesIn(continent);
+            return members.length ? [continentGeoCode(continent), ...members] : [];
+          })
+      ),
+    ];
     if (countryCodes.length) {
       geographyFilters.push(`EXISTS (${countryLinks} AND g.code = ANY($${paramIdx}::text[]))`);
       params.push(countryCodes);
       paramIdx++;
     }
-    filters.push(`(${geographyFilters.join(" OR ")})`);
+    // An unknown continent matches nothing rather than producing invalid SQL
+    filters.push(geographyFilters.length ? `(${geographyFilters.join(" OR ")})` : "FALSE");
   }
 
   // Filter: group
@@ -218,20 +233,25 @@ export async function GET(request: NextRequest) {
   // Fetch mapped countries for displayed alerts
   const alertIds = alertsResult.rows.map((r: { id: string }) => r.id);
   const geoMap: Record<string, string[]> = {};
+  // Same locations with where they came from: imported automatically, or mapped by a person
+  const geoDetails: Record<string, Array<{ name: string; manual: boolean; continent: boolean }>> = {};
   const productMap: Record<string, string[]> = {};
 
   if (alertIds.length > 0) {
     const geoResult = await query(
-      `SELECT ag.alert_id, g.display_name
+      `SELECT ag.alert_id, g.display_name, g.level,
+              (ag.state = 'confirmed' AND ag.source_evidence = 'manual') AS manual
        FROM alert_geographies ag
-       JOIN geographies g ON g.id = ag.geography_id AND g.level = 'country'
+       JOIN geographies g ON g.id = ag.geography_id AND g.level IN ('country', 'region')
        WHERE ag.alert_id = ANY($1) AND ag.company_id = $2 AND ag.state <> 'rejected'
-       ORDER BY g.display_name`,
+       ORDER BY (g.level = 'region') DESC, g.display_name`,
       [alertIds, companyId]
     );
     for (const row of geoResult.rows) {
       if (!geoMap[row.alert_id]) geoMap[row.alert_id] = [];
       geoMap[row.alert_id].push(row.display_name);
+      if (!geoDetails[row.alert_id]) geoDetails[row.alert_id] = [];
+      geoDetails[row.alert_id].push({ name: row.display_name, manual: !!row.manual, continent: row.level === 'region' });
     }
 
   }
@@ -250,6 +270,7 @@ export async function GET(request: NextRequest) {
     stage: row.stage,
     jurisdiction_raw: row.jurisdiction_raw,
     geographies: geoMap[row.id as string] || [],
+    geography_details: geoDetails[row.id as string] || [],
     products: productMap[row.id as string] || [],
     product_raw: row.product_raw,
     source_url: row.source_url,
