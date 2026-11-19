@@ -1,6 +1,7 @@
 import { query } from "@/lib/db";
 import { decryptSecret } from "./secret";
 import { DEFAULT_GROUPING_PROMPT } from "@/lib/grouping/ai-prompt";
+import { DEFAULT_REPORT_PROMPT } from "@/lib/reports-ai-prompt";
 import type { Provider } from "./providers";
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -16,6 +17,9 @@ export interface AiSettings {
   effort: Effort;
   grouping_prompt: string;
   prompt_is_default: boolean;
+  /** Instructions for writing the monthly report with AI */
+  report_prompt: string;
+  report_prompt_is_default: boolean;
   read_source_pages: boolean;
   after_import: AfterImport;
   auto_accept_confidence: number;
@@ -47,6 +51,8 @@ export async function loadAiSettings(companyId: string): Promise<AiSettings> {
     effort: (r?.effort as Effort) ?? "high",
     grouping_prompt: r?.grouping_prompt?.trim() ? r.grouping_prompt : DEFAULT_GROUPING_PROMPT,
     prompt_is_default: !r?.grouping_prompt?.trim(),
+    report_prompt: r?.report_prompt?.trim() ? r.report_prompt : DEFAULT_REPORT_PROMPT,
+    report_prompt_is_default: !r?.report_prompt?.trim(),
     read_source_pages: r ? !!r.read_source_pages : true,
     after_import: (r?.after_import as AfterImport) ?? "off",
     auto_accept_confidence: r?.auto_accept_confidence ?? 90,

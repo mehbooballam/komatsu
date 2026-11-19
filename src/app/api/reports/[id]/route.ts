@@ -4,7 +4,12 @@ import { createAuditEvent, forbidden, getAuth, unauthorized } from "@/lib/auth-h
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { UUID_RE } from "@/lib/inventory";
 import { canEditReports, sanitizeContent, SECTION_KEYS, type SectionKey } from "@/lib/reports";
-import { AUTO_REFRESH_MINUTES, loadHistory, refreshReport, REPORT_JOINS, REPORT_SELECT } from "@/lib/reports-server";
+import { AUTO_REFRESH_MINUTES, captureSnapshot, loadHistory, previousSnapshot, refreshReport, REPORT_JOINS, REPORT_SELECT } from "@/lib/reports-server";
+import { writeReportWithAI } from "@/lib/reports-ai";
+import { ProviderError } from "@/lib/ai/providers";
+
+// Writing the report with AI can take a minute or more
+export const maxDuration = 300;
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -46,6 +51,7 @@ export async function GET(_request: NextRequest, { params }: Ctx) {
  *   { title?, content? }               save the draft
  *   { action: "refresh_snapshot" }     re-capture the figures and regenerate unedited sections
  *   { action: "reset_section", section } regenerate one section, dropping its manual edits
+ *   { action: "write_with_ai" }       refresh the figures and let the AI write every section not edited by hand
  *   { action: "publish" | "unpublish" }
  * `expected_updated_at` guards against overwriting someone else's newer edit.
  */
@@ -88,6 +94,26 @@ export async function PATCH(request: NextRequest, { params }: Ctx) {
     );
     await createAuditEvent(auth.company_id, auth.membership_id, publish ? "report_published" : "report_unpublished",
       "risk_report", id, { status: before.status }, { status: publish ? "published" : "draft", title: before.title });
+  } else if (action === "write_with_ai") {
+    if (before.status === "published") {
+      return NextResponse.json({ error: "Move the report back to draft before rewriting it" }, { status: 400 });
+    }
+    try {
+      const snapshot = await captureSnapshot(auth.company_id, auth.time_zone, before.period);
+      const prev = await previousSnapshot(auth.company_id, before.period);
+      const { content, model, usage } = await writeReportWithAI(auth.company_id, sanitizeContent(before.content), snapshot, prev, before.period);
+      await query(
+        `UPDATE risk_reports SET content = $3, snapshot = $4, snapshot_at = now(), updated_at = now(), updated_by = $5
+         WHERE company_id = $1 AND id = $2 AND status = 'draft'`,
+        [auth.company_id, id, JSON.stringify(content), JSON.stringify(snapshot), auth.membership_id]
+      );
+      await createAuditEvent(auth.company_id, auth.membership_id, "report_ai_written", "risk_report", id, null,
+        { title: before.title, model, sections: content.ai_sections, input_tokens: usage.input_tokens, output_tokens: usage.output_tokens });
+    } catch (err) {
+      const e = err instanceof ProviderError ? err : null;
+      if (!e) console.error("Writing the report with AI failed:", err);
+      return NextResponse.json({ error: e ? e.message : "Could not write the report with AI" }, { status: 400 });
+    }
   } else if (action === "refresh_snapshot" || action === "reset_section") {
     if (before.status === "published") {
       return NextResponse.json({ error: "Move the report back to draft before refreshing it" }, { status: 400 });

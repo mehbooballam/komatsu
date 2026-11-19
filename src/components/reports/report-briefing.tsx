@@ -20,6 +20,8 @@ export interface SectionEditing {
   /** Section currently open for editing */
   editing: SectionKey | null;
   edited: SectionKey[];
+  /** Sections written by AI */
+  ai?: SectionKey[];
   onEdit: (key: SectionKey) => void;
   onReset: (key: SectionKey) => void;
   /** The inline editor (fields + save / cancel) for the open section */
@@ -51,15 +53,22 @@ function Editable({ k, children, className = "" }: { k: SectionKey; children: Re
     );
   }
   const edited = ctx.edited.includes(k);
+  const byAi = !edited && !!ctx.ai?.includes(k);
   return (
     <div className={`group/edit relative ${className}`}>
       {children}
       <div className="absolute right-3 top-3 z-10 flex items-center gap-1 print:hidden">
-        {edited && (
+        {(edited || byAi) && (
           <>
-            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 ring-1 ring-blue-200 dark:bg-blue-500/10 dark:text-blue-300 dark:ring-blue-500/30" title="Edited by hand — kept when the report refreshes">
-              Edited
-            </span>
+            {edited ? (
+              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 ring-1 ring-blue-200 dark:bg-blue-500/10 dark:text-blue-300 dark:ring-blue-500/30" title="Edited by hand — kept when the report refreshes">
+                Edited
+              </span>
+            ) : (
+              <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700 ring-1 ring-violet-200 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-500/30" title="Written by AI from the alert register — kept when the report refreshes">
+                AI
+              </span>
+            )}
             <button
               type="button"
               onClick={() => ctx.onReset(k)}

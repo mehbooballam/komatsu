@@ -16,7 +16,7 @@ const btn =
 const primaryBtn =
   "inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700 disabled:opacity-50";
 
-type Busy = null | "publish" | "unpublish" | "refresh" | "delete" | "save" | "reset";
+type Busy = null | "publish" | "unpublish" | "refresh" | "delete" | "save" | "reset" | "ai";
 
 export default function ReportPage() {
   const { id } = useParams<{ id: string }>();
@@ -151,6 +151,7 @@ export default function ReportPage() {
     ? {
         editing,
         edited: report.content.edited,
+        ai: report.content.ai_sections,
         onEdit: startEdit,
         onReset: (key) => void run("reset", { action: "reset_section", section: key }, "Section reset to the automatic version."),
         renderEditor: (key) => (
@@ -200,6 +201,17 @@ export default function ReportPage() {
 
           <div className="flex flex-wrap items-center gap-2">
             {editable && (
+              <button
+                className="inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300"
+                onClick={() => run("ai", { action: "write_with_ai" }, "Report written with AI from the latest alert data. Sections you edited were kept.")}
+                disabled={!!busy || !!editing}
+                title="Let your AI model write every section from the alert register (sections you edited are kept). Uses the instructions in Settings › AI."
+              >
+                {busy === "ai" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {busy === "ai" ? "Writing… (up to a minute)" : report.content.ai_written_at ? "Rewrite with AI" : "Write with AI"}
+              </button>
+            )}
+            {editable && (
               <button className={btn} onClick={() => run("refresh", { action: "refresh_snapshot" }, "Report refreshed from the latest alert data.")} disabled={!!busy || !!editing} title="Regenerate from the latest alert data (your edited sections are kept)">
                 <RefreshCw className={`h-4 w-4 ${busy === "refresh" ? "animate-spin" : ""}`} /> Refresh
               </button>
@@ -231,7 +243,9 @@ export default function ReportPage() {
 
         {editable && !editing && (
           <p className="text-xs text-[var(--muted-foreground)]">
-            Written automatically from the alert register. Use the <PencilLine className="inline h-3 w-3" /> on any section to change it.
+            {report.content.ai_written_at
+              ? <>Written with AI ({report.content.ai_model}) on {new Date(report.content.ai_written_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} from the alert register. Sections marked AI keep their text when the figures refresh; use <PencilLine className="inline h-3 w-3" /> to change one.</>
+              : <>Written automatically from the alert register. Use <strong>Write with AI</strong> for a fuller narrative, or the <PencilLine className="inline h-3 w-3" /> on any section to change it.</>}
           </p>
         )}
 

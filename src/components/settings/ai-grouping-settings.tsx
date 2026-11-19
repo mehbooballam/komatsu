@@ -13,6 +13,7 @@ interface Settings {
   api_key_last4: string | null;
   effort: "low" | "medium" | "high" | "xhigh" | "max";
   grouping_prompt: string;
+  report_prompt: string;
   prompt_is_default: boolean;
   read_source_pages: boolean;
   theme_fallback: boolean;
@@ -73,6 +74,9 @@ export function AiGroupingSettings({ canEdit }: { canEdit: boolean }) {
   const [draft, setDraft] = useState<Settings | null>(null);
   const [defaultPrompt, setDefaultPrompt] = useState("");
   const [outputRules, setOutputRules] = useState("");
+  const [defaultReportPrompt, setDefaultReportPrompt] = useState("");
+  const [reportRules, setReportRules] = useState("");
+  const [showReportRules, setShowReportRules] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [newKey, setNewKey] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -100,6 +104,8 @@ export function AiGroupingSettings({ canEdit }: { canEdit: boolean }) {
         setDraft(j.settings);
         setDefaultPrompt(j.default_prompt);
         setOutputRules(j.output_rules);
+        setDefaultReportPrompt(j.default_report_prompt);
+        setReportRules(j.report_output_rules);
       })
       .catch(() => !cancelled && setLoadError("Could not load the AI settings"));
     return () => {
@@ -129,11 +135,13 @@ export function AiGroupingSettings({ canEdit }: { canEdit: boolean }) {
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setDraft((d) => (d ? { ...d, [k]: v } : d));
   const dirty =
-    JSON.stringify({ ...draft, grouping_prompt: draft.grouping_prompt.trim() }) !== JSON.stringify({ ...saved, grouping_prompt: saved.grouping_prompt.trim() }) ||
+    JSON.stringify({ ...draft, grouping_prompt: draft.grouping_prompt.trim(), report_prompt: draft.report_prompt.trim() }) !==
+      JSON.stringify({ ...saved, grouping_prompt: saved.grouping_prompt.trim(), report_prompt: saved.report_prompt.trim() }) ||
     !!newKey.trim() || removeKey;
   const keyForRequests = newKey.trim() || undefined;
   const usingSavedKey = !newKey.trim() && saved.has_key && !removeKey && draft.provider === saved.provider;
   const promptIsDefault = draft.grouping_prompt.trim() === defaultPrompt.trim();
+  const reportPromptIsDefault = draft.report_prompt.trim() === defaultReportPrompt.trim();
 
   async function loadModels() {
     if (!draft) return;
@@ -178,6 +186,7 @@ export function AiGroupingSettings({ canEdit }: { canEdit: boolean }) {
         base_url: draft.base_url,
         effort: draft.effort,
         grouping_prompt: promptIsDefault ? null : draft.grouping_prompt,
+        report_prompt: reportPromptIsDefault ? null : draft.report_prompt,
         read_source_pages: draft.read_source_pages,
         theme_fallback: draft.theme_fallback,
         after_import: draft.after_import,
@@ -492,6 +501,46 @@ export function AiGroupingSettings({ canEdit }: { canEdit: boolean }) {
               Added after your instructions so the answer can be read by the app (not editable). Each request also contains the existing groups and the alerts as JSON.
             </p>
             <pre className="max-h-72 overflow-auto whitespace-pre-wrap font-mono text-[12px] text-slate-700 dark:text-slate-300">{outputRules}</pre>
+          </div>
+        )}
+      </Card>
+
+      {/* Report prompt */}
+      <Card
+        title="Report writing instructions (prompt)"
+        subtitle="How the AI writes the monthly Product Regulatory Risk Report (Monthly Reports › Write with AI). Uses the provider and model above."
+        icon={FileText}
+        action={
+          <button
+            type="button"
+            disabled={!canEdit || reportPromptIsDefault}
+            onClick={() => set("report_prompt", defaultReportPrompt)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+          >
+            <RotateCcw className="h-4 w-4" /> Reset to default
+          </button>
+        }
+      >
+        <textarea
+          aria-label="Report writing prompt"
+          className="min-h-[24rem] w-full rounded-lg border border-slate-200 bg-white p-3 font-mono text-[13px] leading-relaxed focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900"
+          disabled={!canEdit}
+          value={draft.report_prompt}
+          onChange={(e) => set("report_prompt", e.target.value)}
+          spellCheck={false}
+        />
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+          <span>{reportPromptIsDefault ? "Default instructions" : "Custom instructions"} · {draft.report_prompt.length.toLocaleString()} characters</span>
+          <button type="button" onClick={() => setShowReportRules((v) => !v)} className="font-medium text-blue-600 hover:underline">
+            {showReportRules ? "Hide" : "Show"} what the app adds to every request
+          </button>
+        </div>
+        {showReportRules && (
+          <div className="mt-3 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/60">
+            <p className="mb-2 text-xs text-[var(--muted-foreground)]">
+              Added after your instructions so the answer can be read by the app (not editable). Each request also contains this month&apos;s figures, regulation groups, the critical and high alerts with their summaries, deadlines and new alerts as JSON.
+            </p>
+            <pre className="max-h-72 overflow-auto whitespace-pre-wrap font-mono text-[12px] text-slate-700 dark:text-slate-300">{reportRules}</pre>
           </div>
         )}
       </Card>

@@ -5,6 +5,7 @@ import { loadAiSettings } from "@/lib/ai/settings";
 import { encryptSecret } from "@/lib/ai/secret";
 import { PROVIDER_INFO, type Provider } from "@/lib/ai/provider-info";
 import { DEFAULT_GROUPING_PROMPT, GROUPING_OUTPUT_RULES } from "@/lib/grouping/ai-prompt";
+import { DEFAULT_REPORT_PROMPT, REPORT_OUTPUT_RULES } from "@/lib/reports-ai-prompt";
 
 /** GET — AI grouping settings (never includes the API key). */
 export async function GET() {
@@ -15,6 +16,8 @@ export async function GET() {
     settings: await loadAiSettings(auth.company_id),
     default_prompt: DEFAULT_GROUPING_PROMPT,
     output_rules: GROUPING_OUTPUT_RULES,
+    default_report_prompt: DEFAULT_REPORT_PROMPT,
+    report_output_rules: REPORT_OUTPUT_RULES,
   });
 }
 
@@ -64,6 +67,11 @@ export async function PUT(request: NextRequest) {
   else if (typeof body.grouping_prompt === "string" && body.grouping_prompt.trim() && body.grouping_prompt.trim() !== DEFAULT_GROUPING_PROMPT.trim()) {
     prompt = body.grouping_prompt.slice(0, 40000);
   } else prompt = null;
+  let reportPrompt: string | null;
+  if (body.report_prompt === undefined) reportPrompt = before.report_prompt_is_default ? null : before.report_prompt;
+  else if (typeof body.report_prompt === "string" && body.report_prompt.trim() && body.report_prompt.trim() !== DEFAULT_REPORT_PROMPT.trim()) {
+    reportPrompt = body.report_prompt.slice(0, 40000);
+  } else reportPrompt = null;
   const enabled = typeof body.enabled === "boolean" ? body.enabled : before.enabled;
   const readPages = typeof body.read_source_pages === "boolean" ? body.read_source_pages : before.read_source_pages;
   const themeFallback = typeof body.theme_fallback === "boolean" ? body.theme_fallback : before.theme_fallback;
@@ -76,7 +84,7 @@ export async function PUT(request: NextRequest) {
   if (enabled && !model) return NextResponse.json({ error: "Choose a model before turning AI grouping on" }, { status: 400 });
 
   await query(`INSERT INTO ai_settings (company_id) VALUES ($1) ON CONFLICT (company_id) DO NOTHING`, [auth.company_id]);
-  const params: unknown[] = [auth.company_id, enabled, provider, model, baseUrl, effort, prompt, readPages, afterImport, autoAccept, minConf, auth.membership_id, themeFallback];
+  const params: unknown[] = [auth.company_id, enabled, provider, model, baseUrl, effort, prompt, readPages, afterImport, autoAccept, minConf, auth.membership_id, themeFallback, reportPrompt];
   let keySql = "";
   if (newKey) {
     params.push(encryptSecret(newKey), newKey.slice(-4));
@@ -87,7 +95,7 @@ export async function PUT(request: NextRequest) {
   await query(
     `UPDATE ai_settings SET enabled = $2, provider = $3, model = $4, base_url = $5, effort = $6, grouping_prompt = $7,
             read_source_pages = $8, after_import = $9, auto_accept_confidence = $10, min_confidence = $11,
-            updated_by = $12, theme_fallback = $13, updated_at = now()${keySql}
+            updated_by = $12, theme_fallback = $13, report_prompt = $14, updated_at = now()${keySql}
      WHERE company_id = $1`,
     params
   );
@@ -96,6 +104,7 @@ export async function PUT(request: NextRequest) {
   const keys = ["enabled", "provider", "model", "base_url", "effort", "read_source_pages", "after_import", "auto_accept_confidence", "min_confidence", "theme_fallback"] as const;
   const changed: Record<string, unknown> = Object.fromEntries(keys.filter((k) => before[k] !== after[k]).map((k) => [k, after[k]]));
   if (before.grouping_prompt !== after.grouping_prompt) changed.grouping_prompt = after.prompt_is_default ? "reset to default" : "edited";
+  if (before.report_prompt !== after.report_prompt) changed.report_prompt = after.report_prompt_is_default ? "reset to default" : "edited";
   if (newKey) changed.api_key = `replaced (ends …${after.api_key_last4})`;
   if (removeKey && before.has_key) changed.api_key = "removed";
   if (Object.keys(changed).length) {

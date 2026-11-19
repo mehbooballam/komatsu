@@ -350,6 +350,8 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
         changes: [],
         note,
       };
+    case "report_ai_written":
+      return { category: "reports", summary: ["Wrote ", report(a), " with AI", a.model ? ` (${String(a.model)})` : ""], changes: [] };
     case "import_cancelled":
       return { category: "imports", summary: ["Cancelled the import of ", { b: String(b.filename ?? "a file") }], changes: [] };
     case "import_mapping_changed":

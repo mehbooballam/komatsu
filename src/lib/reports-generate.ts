@@ -54,7 +54,7 @@ const GROUP_TREE = `
 
 const OWNER = `COALESCE(a.direct_owner_membership_id, rg.owner_membership_id)`;
 
-async function loadFacts(companyId: string, asOf: string) {
+export async function loadFacts(companyId: string, asOf: string) {
   const [groups, top, upcoming, coverage] = await Promise.all([
     query(
       `${GROUP_TREE}
@@ -281,6 +281,9 @@ export async function generateContent(
     scorecard_note: "",
     next_30_days: next,
     edited: [],
+    ai_sections: [],
+    ai_written_at: null,
+    ai_model: null,
   };
 }
 
@@ -292,7 +295,15 @@ export async function regenerate(
   companyId: string, current: ReportContent, snapshot: ReportSnapshot, previous: ReportSnapshot | null, only?: SectionKey[],
 ): Promise<ReportContent> {
   const fresh = await generateContent(companyId, snapshot, previous);
-  const targets = only ?? SECTION_KEYS.filter((k) => !current.edited.includes(k));
+  // Sections edited by hand or written by AI are kept, unless named in `only` ("Reset to automatic")
+  const targets = only ?? SECTION_KEYS.filter((k) => !current.edited.includes(k) && !current.ai_sections.includes(k));
   const merged = copySections(current, fresh, targets);
-  return { ...merged, edited: current.edited.filter((k) => !targets.includes(k)) };
+  const aiLeft = current.ai_sections.filter((k) => !targets.includes(k));
+  return {
+    ...merged,
+    edited: current.edited.filter((k) => !targets.includes(k)),
+    ai_sections: aiLeft,
+    ai_written_at: aiLeft.length ? current.ai_written_at : null,
+    ai_model: aiLeft.length ? current.ai_model : null,
+  };
 }

@@ -53,6 +53,10 @@ export interface ReportContent {
   next_30_days: string[];
   /** Sections a person has edited; regeneration leaves these alone */
   edited: SectionKey[];
+  /** Sections written by AI; refreshes keep them too (until rewritten or reset) */
+  ai_sections: SectionKey[];
+  ai_written_at: string | null;
+  ai_model: string | null;
 }
 
 /** Sections of the report that are generated together and edited together. */
@@ -167,6 +171,9 @@ export function defaultContent(preparedBy = ""): ReportContent {
     scorecard_note: "",
     next_30_days: [""],
     edited: [],
+    ai_sections: [],
+    ai_written_at: null,
+    ai_model: null,
   };
 }
 
@@ -256,6 +263,9 @@ export function sanitizeContent(input: unknown): ReportContent {
     scorecard_note: str(c.scorecard_note, LONG),
     next_30_days: list(c.next_30_days, (d) => str(d, SHORT * 2)),
     edited: Array.isArray(c.edited) ? SECTION_KEYS.filter((k) => (c.edited as unknown[]).includes(k)) : [],
+    ai_sections: Array.isArray(c.ai_sections) ? SECTION_KEYS.filter((k) => (c.ai_sections as unknown[]).includes(k)) : [],
+    ai_written_at: typeof c.ai_written_at === "string" ? c.ai_written_at.slice(0, 40) : null,
+    ai_model: typeof c.ai_model === "string" ? c.ai_model.slice(0, 120) : null,
   };
 }
 

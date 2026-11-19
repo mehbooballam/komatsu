@@ -603,7 +603,7 @@ const TABS = [
   { key: "scoring", label: "Scoring policy", icon: SlidersHorizontal },
   { key: "general", label: "Workspace", icon: Building2 },
   { key: "imports", label: "Imports", icon: Upload },
-  { key: "ai", label: "AI grouping", icon: Sparkles },
+  { key: "ai", label: "AI grouping & reports", icon: Sparkles },
 ] as const;
 
 export default function SettingsPage() {
