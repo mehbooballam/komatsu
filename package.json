@@ -13,7 +13,8 @@
     "setup": "npm install && npm run db:reset",
     "db:recalc": "tsx scripts/recalculate.ts",
     "db:link-products": "tsx scripts/link-products.ts",
-    "db:sample-groups": "tsx scripts/sample-groups.ts"
+    "db:sample-groups": "tsx scripts/sample-groups.ts",
+    "vercel-build": "if [ \"$VERCEL_ENV\" = \"production\" ]; then npm run db:migrate; fi && next build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",
