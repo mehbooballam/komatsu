@@ -67,7 +67,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   );
 
   await createAuditEvent(auth.company_id, auth.membership_id, "assign_owner", "alert", id,
-    { owner: beforeOwner }, { owner: newDirectOwner, effective: effectiveOwner, origin }, comment);
+    { owner: beforeOwner },
+    { owner: newDirectOwner, effective: effectiveOwner, origin, ...(body.revert === true ? { reverted_change: true } : {}) },
+    comment);
 
   const nameRes = newDirectOwner
     ? await query(

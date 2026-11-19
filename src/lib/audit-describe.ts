@@ -258,7 +258,10 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
         summary: isTotal
           ? ["Set the total score of ", alert(), " to ", { b: formatValue(a.value, refs) }]
           : ["Changed ", { b: formatValue(a.target, refs) }, " to ", { b: formatValue(a.value, refs) }, " on ", alert()],
-        changes: [],
+        // Older entries did not record the value before the change
+        changes: "value" in b
+          ? [{ label: formatValue(a.target, refs), before: b.value == null ? "Imported value" : formatValue(b.value, refs), after: formatValue(a.value, refs) }]
+          : [],
         note,
       };
     }
@@ -268,6 +271,20 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
         summary: ["Removed the ", { b: formatValue(b.target, refs) }, " adjustment from ", alert()],
         changes: [{ label: formatValue(b.target, refs), before: formatValue(b.value, refs), after: "Calculated value" }],
       };
+    case "score_override_reverted":
+    case "score_override_restored": {
+      const restored = e.action === "score_override_restored";
+      return {
+        category: "alerts",
+        summary: [restored ? "Restored the " : "Undid the last ", { b: formatValue(a.target ?? b.target, refs) }, restored ? " adjustment on " : " change on ", alert()],
+        changes: [{
+          label: formatValue(a.target ?? b.target, refs),
+          before: b.value == null ? "Imported value" : formatValue(b.value, refs),
+          after: a.value == null ? "Imported value" : formatValue(a.value, refs),
+        }],
+        note,
+      };
+    }
     case "alert_updated":
       return { category: "alerts", summary: ["Updated ", alert()], changes: diff(before, after, refs), note };
     case "factor_confidence_set":

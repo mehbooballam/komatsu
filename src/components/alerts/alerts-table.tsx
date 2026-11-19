@@ -226,11 +226,11 @@ export async function assignAlerts(ids: string[], membershipId: string | null, c
 }
 
 /** Flag alerts for human review (true) or mark them reviewed (false). Returns how many changed. */
-export async function setHumanReview(ids: string[], needsReview: boolean, comment: string): Promise<number> {
+export async function setHumanReview(ids: string[], needsReview: boolean, comment: string, revert = false): Promise<number> {
   const res = await fetch("/api/alerts/human-review", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ alert_ids: ids, needs_review: needsReview, comment }),
+    body: JSON.stringify({ alert_ids: ids, needs_review: needsReview, comment, ...(revert ? { revert: true } : {}) }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Could not update review status");

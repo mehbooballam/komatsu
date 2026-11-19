@@ -121,9 +121,11 @@ export async function GET(
 
   // Fetch active overrides
   const overridesRes = await query(
-    `SELECT * FROM score_overrides
-     WHERE alert_id = $1 AND company_id = $2 AND ended_at IS NULL
-     AND (expires_at IS NULL OR expires_at > now())`,
+    // previous_value: what a step back brings back (null = the imported value)
+    `SELECT o.*, p.value AS previous_value FROM score_overrides o
+     LEFT JOIN score_overrides p ON p.id = o.replaces_override_id
+     WHERE o.alert_id = $1 AND o.company_id = $2 AND o.ended_at IS NULL
+     AND (o.expires_at IS NULL OR o.expires_at > now())`,
     [id, companyId]
   );
 

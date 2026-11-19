@@ -173,7 +173,7 @@ export function ScoreEditor({
                   <label className="text-sm font-semibold text-slate-800 dark:text-slate-200">{FACTOR_LABELS[key]}</label>
                   {factor?.override != null && (
                     <button onClick={() => onClearOverride(key)} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline">
-                      <RotateCcw className="h-3 w-3" /> Clear adjustment
+                      <RotateCcw className="h-3 w-3" /> Undo last change
                     </button>
                   )}
                 </div>
@@ -256,7 +256,7 @@ export function ScoreEditor({
             )}
             {totalOverride != null && (
               <button onClick={() => onClearOverride("total")} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline">
-                <RotateCcw className="h-3 w-3" /> Remove total override ({totalOverride.toLocaleString()})
+                <RotateCcw className="h-3 w-3" /> Undo last total change ({totalOverride.toLocaleString()})
               </button>
             )}
           </div>

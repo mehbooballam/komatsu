@@ -34,9 +34,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   }
 
   const overrides = await query(
-    `SELECT target, value, reason, expires_at, created_at FROM score_overrides
-     WHERE alert_id = $1 AND company_id = $2 AND ended_at IS NULL
-     ORDER BY created_at DESC`,
+    `SELECT o.target, o.value, o.reason, o.expires_at, o.created_at, p.value AS previous_value
+     FROM score_overrides o
+     LEFT JOIN score_overrides p ON p.id = o.replaces_override_id
+     WHERE o.alert_id = $1 AND o.company_id = $2 AND o.ended_at IS NULL
+     ORDER BY o.created_at DESC`,
     [id, session.membership.company_id]
   );
 
@@ -82,23 +84,26 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: "Value must be 1, 3, 6, or 9" }, { status: 400 });
   }
 
-  await query(
+  // The adjustment this one replaces; undoing this one brings it back (none = the imported value)
+  const ended = await query(
     `UPDATE score_overrides SET ended_at = NOW()
-     WHERE alert_id = $1 AND company_id = $2 AND target = $3 AND ended_at IS NULL`,
+     WHERE alert_id = $1 AND company_id = $2 AND target = $3 AND ended_at IS NULL
+     RETURNING id, value`,
     [id, session.membership.company_id, target]
   );
+  const replaced = ended.rows[0] ?? null;
 
   await query(
-    `INSERT INTO score_overrides (company_id, alert_id, target, value, reason, created_by, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [session.membership.company_id, id, target, value, reason, session.membership.id, expires_at || null]
+    `INSERT INTO score_overrides (company_id, alert_id, target, value, reason, created_by, expires_at, replaces_override_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [session.membership.company_id, id, target, value, reason, session.membership.id, expires_at || null, replaced?.id ?? null]
   );
 
   await query(
     `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, before_values, after_values, reason)
-     VALUES ($1, $2, 'score_override', 'alert', $3, '{}', $4, $5)`,
+     VALUES ($1, $2, 'score_override', 'alert', $3, $4, $5, $6)`,
     [session.membership.company_id, session.membership.id, id,
-     JSON.stringify({ target, value }), reason]
+     JSON.stringify({ target, value: replaced?.value ?? null }), JSON.stringify({ target, value }), reason]
   );
 
   // The reason is the person's comment on this change

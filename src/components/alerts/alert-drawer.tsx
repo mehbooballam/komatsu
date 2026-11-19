@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   X, ExternalLink, Clock, ChevronDown, MapPin, Tag, FileText, AlertTriangle, Loader2,
   SlidersHorizontal, Link2, Package, FolderPlus, Check, UserPlus, UserMinus,
-  CalendarCheck, Globe2, History, CheckCircle2, FolderMinus, Layers, Fingerprint, Eye,
+  CalendarCheck, Globe2, History, CheckCircle2, FolderMinus, Layers, Fingerprint, Eye, Undo2,
 } from "lucide-react";
 import { IDENTIFIER_LABELS, METHOD_LABELS, VERSION_LABELS, type GroupingMethod, type IdentifierKind, type VersionType } from "@/lib/grouping/labels";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -189,7 +189,7 @@ interface AlertDetail {
   }>;
   source_factors: Array<{ factor_key: string; original_value: string; parsed_value: number | null; rationale: string; confidence?: string | null }>;
   factor_confidence?: Array<{ factor_key: string; confidence: string; set_at: string; set_by_name: string | null }>;
-  active_overrides: Array<{ target: string; value: number; reason: string; expires_at: string | null }>;
+  active_overrides: Array<{ target: string; value: number; reason: string; expires_at: string | null; previous_value: number | null }>;
   products: AttachedProduct[];
   /** Notes the viewer can see (team notes + their own private ones) */
   notes_count?: number;
@@ -485,16 +485,16 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
     }
   }
 
-  const changeReview = async (flag: boolean) => {
+  const changeReview = async (flag: boolean, revert = false) => {
     if (!alertId) return;
     const comment = await askChangeComment({
-      action: flag ? "Mark Needs review" : "Mark reviewed",
+      action: revert ? (flag ? "Revert: mark Needs review again" : "Revert: mark reviewed again") : flag ? "Mark Needs review" : "Mark reviewed",
       detail: flag ? "Say what needs checking" : "Say what you checked",
     });
     if (!comment) return;
     setBusy(true);
     try {
-      await setHumanReview([alertId], flag, comment);
+      await setHumanReview([alertId], flag, comment, revert);
       await load();
       setHistory(null);
       setNotesCount(null);
@@ -507,17 +507,17 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
     }
   };
 
-  const setConfidence = async (factorKey: string, label: string, value: string | null) => {
+  const setConfidence = async (factorKey: string, label: string, value: string | null, revert = false) => {
     if (!alertId) return;
     const comment = await askChangeComment({
-      action: value ? `Set ${label} confidence to ${value}` : `Reset ${label} confidence to the imported value`,
+      action: `${revert ? "Revert: " : ""}${value ? `Set ${label} confidence to ${value}` : `Reset ${label} confidence to the imported value`}`,
     });
     if (!comment) return;
     await mutate(value ? "Confidence updated" : "Confidence reset", () =>
       fetch(`/api/alerts/${alertId}/confidence`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ factor_key: factorKey, confidence: value, comment }),
+        body: JSON.stringify({ factor_key: factorKey, confidence: value, comment, ...(revert ? { revert: true } : {}) }),
       })
     );
   };
@@ -617,14 +617,99 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
     );
   };
 
-  const clearOverride = async (target: string) => {
-    const comment = await askChangeComment({ action: `Remove the score adjustment for ${target.replace(/_/g, " ")}`, detail: "The calculated value is used again" });
-    if (!comment) return;
-    const ok = await mutate("Override cleared", () =>
-      fetch(`/api/alerts/${alertId}/score?target=${target}`, { method: "DELETE", headers: commentHeader(comment) })
+  const targetName = (t: string) => (t === "total" ? "Total score" : FACTORS.find((x) => x.key === t)?.label ?? t.replace(/_/g, " "));
+
+  /**
+   * Steps a score back one change: the previous adjustment comes back, or the imported value
+   * when there was none. Repeat to walk back to the imported value. "restore" brings back an
+   * adjustment that was removed.
+   */
+  const stepBack = async (target: string, mode: "undo" | "restore" = "undo") => {
+    const name = targetName(target);
+    const ov = data?.active_overrides.find((o) => o.target === target);
+    const to = mode === "restore"
+      ? "the adjustment that was removed"
+      : ov?.previous_value != null ? `the previous adjustment (${ov.previous_value})` : "the imported value";
+    const comment = await askChangeComment({
+      action: mode === "restore" ? `Restore the ${name} adjustment` : `Undo the last ${name} change`,
+      detail: `${name} goes back to ${to}`,
+    });
+    if (!comment) return false;
+    return mutate(mode === "restore" ? "Adjustment restored" : "Change undone", () =>
+      fetch(`/api/alerts/${alertId}/score/revert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target, mode, comment }),
+      })
     );
+  };
+
+  const clearOverride = async (target: string) => {
+    const ok = await stepBack(target);
     if (ok) setScoreOpen(false);
   };
+
+  /** Puts the owner back to who it was before a change. */
+  const revertOwner = async (ownerId: string | null) => {
+    const who = ownerId ? members.find((m) => m.id === ownerId)?.display_name ?? historyRefs[ownerId]?.name ?? "the previous owner" : null;
+    const comment = await askChangeComment({ action: who ? `Revert owner to ${who}` : "Revert to no owner" });
+    if (!comment) return;
+    return mutate("Owner reverted", () =>
+      fetch(`/api/alerts/${alertId}/assign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ membership_id: ownerId, comment, revert: true }),
+      })
+    );
+  };
+
+  /**
+   * History: per kind of change (a score factor, the owner, a confidence, the review flag) the
+   * changes form a stack — each revert cancels the newest change not reverted yet. The top one can
+   * be reverted while it is still the current value, so changes go back one step at a time
+   * (reverting never just flips back and forth).
+   */
+  const revertActions = new Map<string, () => unknown>();
+  if (canEdit && data && history) {
+    const stacks = new Map<string, Array<{ id: string; run: (() => unknown) | null }>>();
+    for (const e of [...history].reverse()) {
+      const a = (e.after_values || {}) as Record<string, unknown>;
+      const b = (e.before_values || {}) as Record<string, unknown>;
+      let key: string | null = null;
+      let run: (() => unknown) | null = null;
+      if (e.action.startsWith("score_override")) {
+        const t = String(a.target ?? b.target ?? "");
+        key = `score:${t}`;
+        const cur = data.active_overrides.find((o) => o.target === t)?.value ?? null;
+        const after = e.action === "score_override_cleared" || a.value == null ? null : Number(a.value);
+        if (cur === after) run = () => stepBack(t, cur == null ? "restore" : "undo");
+        if (e.action === "score_override_reverted" || e.action === "score_override_restored") {
+          stacks.get(key)?.pop();
+          continue;
+        }
+      } else if (e.action === "assign_owner" && e.entity_type === "alert") {
+        key = "owner";
+        if ((data.alert.ownership.direct_owner_id ?? null) === ((a.owner as string | null) ?? null)) run = () => revertOwner((b.owner as string | null) ?? null);
+      } else if (e.action === "factor_confidence_set") {
+        const fk = String(a.factor_key ?? b.factor_key ?? "");
+        key = `confidence:${fk}`;
+        const cur = data.factor_confidence?.find((c) => c.factor_key === fk)?.confidence ?? null;
+        if (cur === ((a.confidence as string | null) ?? null)) run = () => setConfidence(fk, targetName(fk), (b.confidence as string | null) ?? null, true);
+      } else if (e.action === "human_review_flagged" || e.action === "human_review_cleared") {
+        key = "review";
+        if (!!data.alert.human_review?.required === !!a.human_review_required) run = () => changeReview(!!b.human_review_required, true);
+      }
+      if (!key) continue;
+      const stack = stacks.get(key) ?? [];
+      stacks.set(key, stack);
+      if (a.reverted_change) stack.pop();
+      else stack.push({ id: e.id, run });
+    }
+    for (const stack of stacks.values()) {
+      const top = stack[stack.length - 1];
+      if (top?.run) revertActions.set(top.id, top.run);
+    }
+  }
 
   if (!alertId) return null;
 
@@ -1203,7 +1288,19 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                             <span className="block text-xs text-slate-500">{o.reason}</span>
                           </span>
                           {canEdit && (
-                            <button onClick={() => clearOverride(o.target)} className="shrink-0 text-xs font-medium text-red-600 hover:underline">Clear</button>
+                            <button
+                              onClick={() => stepBack(o.target)}
+                              disabled={busy}
+                              className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-blue-600 hover:underline disabled:opacity-50"
+                              title="Undo this change. Repeat to go back one change at a time, until the imported value."
+                            >
+                              <Undo2 className="h-3.5 w-3.5" /> Step back to{" "}
+                              {o.previous_value != null
+                                ? o.previous_value
+                                : o.target === "total"
+                                  ? `calculated (${data.assessment?.raw_total ?? "—"})`
+                                  : `imported (${scoreFactors[o.target]?.source ?? "—"})`}
+                            </button>
                           )}
                         </li>
                       ))}
@@ -1262,6 +1359,12 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                 ) : history.length === 0 ? (
                   <p className="text-sm text-slate-500">No activity recorded yet.</p>
                 ) : (
+                  <>
+                  {canEdit && (
+                    <p className="mb-4 text-xs text-[var(--muted-foreground)]">
+                      Changes are reverted one step at a time: the newest change to a score, the owner, a confidence or the review flag can be reverted. Older ones can be reverted after that.
+                    </p>
+                  )}
                   <ol className="relative space-y-4 border-l border-slate-200 pl-5 dark:border-slate-700">
                     {history.map((e) => {
                       const d = describeEvent(e, historyRefs);
@@ -1275,10 +1378,20 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                           <p className="text-xs text-slate-500">{new Date(e.occurred_at).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
                           {d.note && <p className="mt-0.5 text-xs italic text-slate-600 dark:text-slate-400">“{d.note}”</p>}
                           <ChangeList changes={d.changes} />
+                          {revertActions.has(e.id) && (
+                            <button
+                              onClick={() => revertActions.get(e.id)?.()}
+                              disabled={busy}
+                              className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline disabled:opacity-50"
+                            >
+                              <Undo2 className="h-3.5 w-3.5" /> Revert this change
+                            </button>
+                          )}
                         </li>
                       );
                     })}
                   </ol>
+                  </>
                 )}
               </Section>
             )}

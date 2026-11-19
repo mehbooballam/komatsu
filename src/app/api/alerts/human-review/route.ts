@@ -27,15 +27,17 @@ export async function POST(request: NextRequest) {
   if (!ids.length) return NextResponse.json({ error: "Alert not found" }, { status: 404 });
 
   const flag = body.needs_review as boolean;
+  // A revert from History: marked as such, and the earlier reason is kept
+  const isRevert = body.revert === true;
   // Only touch alerts whose state actually changes
   const res = flag
     ? await query(
-        `UPDATE alerts SET human_review_required = TRUE, human_review_reason = $3,
+        `UPDATE alerts SET human_review_required = TRUE, human_review_reason = CASE WHEN $5 AND human_review_reason IS NOT NULL THEN human_review_reason ELSE $3 END,
                 human_review_flagged_at = now(), human_review_flagged_by = $2,
                 human_review_cleared_at = NULL, human_review_cleared_by = NULL
          WHERE id = ANY($1::uuid[]) AND company_id = $4 AND NOT human_review_required AND archived_at IS NULL
          RETURNING id`,
-        [ids, auth.membership_id, comment, auth.company_id]
+        [ids, auth.membership_id, comment, auth.company_id, isRevert]
       )
     : await query(
         `UPDATE alerts SET human_review_required = FALSE, human_review_cleared_at = now(), human_review_cleared_by = $2
@@ -55,7 +57,7 @@ export async function POST(request: NextRequest) {
         "alert",
         id,
         { human_review_required: !flag },
-        { human_review_required: flag },
+        isRevert ? { human_review_required: flag, reverted_change: true } : { human_review_required: flag },
         comment
       );
     }

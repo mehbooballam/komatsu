@@ -60,7 +60,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     "alert",
     id,
     { factor_key: factor, confidence: prev },
-    { factor_key: factor, confidence: value },
+    { factor_key: factor, confidence: value, ...(body.revert === true ? { reverted_change: true } : {}) },
     comment
   );
   return NextResponse.json({ ok: true, confidence: value });
