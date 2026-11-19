@@ -14,7 +14,7 @@ import { ALERT_DELETE_ENABLED, canMakeChanges } from "@/lib/auth/permissions";
 import {
   AlertTriangle, Clock, FileWarning, Layers, Loader2, Upload, ArrowRight, ArrowUpRight,
   Globe2, TrendingUp, RefreshCw, CalendarDays, Flame, ListChecks, CheckCircle2,
-  ChevronRight, UserPlus, Tag, Info, Eye,
+  UserPlus, Tag, Info, Eye,
 } from "lucide-react";
 import { ChartFullscreen, FullscreenButton } from "@/components/dashboard/chart-fullscreen";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -746,12 +746,14 @@ export default function DashboardPage() {
                   <li key={a.key}>
                     <Link
                       href={a.href}
-                      className={`group flex h-full flex-col gap-3 rounded-xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                      className={`group relative flex h-full flex-col gap-3 rounded-xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-md ${
                         done
                           ? "border-slate-100 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-900/30"
                           : "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900/60"
                       }`}
                     >
+                      {/* Top corner, above the number; tilted to point out of the tile */}
+                      <ArrowUpRight className="absolute right-1 top-1 h-3 w-3 text-slate-400 opacity-0 transition-all duration-200 group-hover:-translate-y-px group-hover:translate-x-px group-hover:opacity-100 dark:text-slate-500" />
                       <div className="flex items-center justify-between">
                         <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${done ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" : a.tone}`}>
                           {done ? <CheckCircle2 className="h-[18px] w-[18px]" /> : <a.icon className="h-[18px] w-[18px]" />}
@@ -764,7 +766,6 @@ export default function DashboardPage() {
                         <span className={`block text-sm font-medium leading-snug ${done ? "text-slate-500" : "text-slate-900 dark:text-white"}`}>{a.label}</span>
                         <span className="mt-0.5 flex items-center gap-1 text-xs text-[var(--muted-foreground)]">
                           {done ? "All clear" : a.hint}
-                          <ChevronRight className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
                         </span>
                       </div>
                     </Link>
