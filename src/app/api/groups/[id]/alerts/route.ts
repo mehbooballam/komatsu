@@ -3,6 +3,24 @@ import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { ALERT_UUID, alertNotFound, canAccessAlert } from "@/lib/alerts/access";
+import { addChangeNotes, commentRequired, readChangeComment } from "@/lib/change-notes";
+import { loadGroupTree } from "@/lib/groups";
+
+/** Alerts follow their group's owner when they have none of their own. */
+async function refreshOwner(alertId: string) {
+  await query(
+    `UPDATE alert_active_projections p
+     SET effective_owner_id = COALESCE(a.direct_owner_membership_id, rg.owner_membership_id), updated_at = NOW()
+     FROM alerts a LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id
+     WHERE p.alert_id = a.id AND a.id = $1`,
+    [alertId]
+  );
+}
+
+async function groupPath(companyId: string, groupId: string) {
+  const g = (await loadGroupTree(companyId)).find((x) => x.id === groupId);
+  return g ? g.path.join(" › ") : "group";
+}
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
@@ -42,6 +60,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ error: "Invalid relationship" }, { status: 400 });
   }
   if (typeof alert_id !== "string" || !(await canAccessAlert(auth, alert_id))) return alertNotFound();
+  const comment = readChangeComment(request, body);
+  if (!comment) return commentRequired();
 
   const groupCheck = await query(
     `SELECT 1 FROM regulation_groups WHERE id::text = $1 AND company_id = $2 AND state <> 'archived'`,
@@ -50,7 +70,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (groupCheck.rows.length === 0) return NextResponse.json({ error: "Group not found" }, { status: 404 });
 
   if (relationship === "primary") {
-    await query(`UPDATE alerts SET primary_group_id = $1, record_version = record_version + 1 WHERE id = $2 AND company_id = $3`, [id, alert_id, auth.company_id]);
+    // Grouped by hand: the comment is the recorded basis, and automatic grouping won't move it again
+    await query(
+      `UPDATE alerts SET primary_group_id = $1, grouping_method = 'manual', grouping_confidence = NULL,
+              grouping_basis = $4, grouping_reviewed = TRUE, record_version = record_version + 1
+       WHERE id = $2 AND company_id = $3`,
+      [id, alert_id, auth.company_id, comment]
+    );
+    await refreshOwner(alert_id);
   } else {
     await query(
       `INSERT INTO alert_group_links (company_id, alert_id, group_id, relationship, confirmed_by, confirmed_at)
@@ -60,7 +87,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     );
   }
 
-  await createAuditEvent(auth.company_id, auth.membership_id, "link_alert", "regulation_group", id, null, { alert_id, relationship });
+  await createAuditEvent(auth.company_id, auth.membership_id, "link_alert", "regulation_group", id, null, { alert_id, relationship }, comment);
+  const path = await groupPath(auth.company_id, id);
+  await addChangeNotes(auth.company_id, [alert_id], auth.membership_id,
+    relationship === "primary" ? `Moved to group ${path}` : `Linked as related to ${path}`, comment);
 
   return NextResponse.json({ success: true });
 }
@@ -77,11 +107,22 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   if (!alertId) return NextResponse.json({ error: "alert_id required" }, { status: 400 });
   if (!ALERT_UUID.test(id)) return NextResponse.json({ error: "Group not found" }, { status: 404 });
   if (!(await canAccessAlert(auth, alertId))) return alertNotFound();
+  const comment = readChangeComment(request);
+  if (!comment) return commentRequired();
+  const path = await groupPath(auth.company_id, id);
 
-  await query(`UPDATE alerts SET primary_group_id = NULL, record_version = record_version + 1 WHERE id = $1 AND primary_group_id = $2 AND company_id = $3`, [alertId, id, auth.company_id]);
+  // Removed by hand: kept out of automatic grouping from now on
+  await query(
+    `UPDATE alerts SET primary_group_id = NULL, grouping_method = 'manual', grouping_confidence = NULL,
+            grouping_basis = $4, grouping_reviewed = TRUE, record_version = record_version + 1
+     WHERE id = $1 AND primary_group_id = $2 AND company_id = $3`,
+    [alertId, id, auth.company_id, comment]
+  );
+  await refreshOwner(alertId);
   await query(`DELETE FROM alert_group_links WHERE alert_id = $1 AND group_id = $2 AND company_id = $3`, [alertId, id, auth.company_id]);
 
-  await createAuditEvent(auth.company_id, auth.membership_id, "unlink_alert", "regulation_group", id, { alert_id: alertId }, null);
+  await createAuditEvent(auth.company_id, auth.membership_id, "unlink_alert", "regulation_group", id, { alert_id: alertId }, null, comment);
+  await addChangeNotes(auth.company_id, [alertId], auth.membership_id, `Removed from group ${path}`, comment);
 
   return NextResponse.json({ success: true });
 }

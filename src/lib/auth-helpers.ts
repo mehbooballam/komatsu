@@ -52,8 +52,9 @@ export function canImport(role: string): boolean {
   return role === "company_admin" || role === "manager";
 }
 
+/** Changes to alerts, groups and products: administrators and managers. Reviewers and risk owners are read-only. */
 export function canEdit(role: string): boolean {
-  return role === "company_admin" || role === "manager" || role === "reviewer";
+  return role === "company_admin" || role === "manager";
 }
 
 export async function createAuditEvent(

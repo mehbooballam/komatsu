@@ -18,6 +18,10 @@ export async function GET() {
             CASE WHEN $2 THEN (SELECT COUNT(DISTINCT l.alert_id)::int FROM alert_product_links l
              LEFT JOIN products p2 ON p2.id = l.product_id
              WHERE l.state <> 'rejected' AND (l.family_id = pf.id OR p2.family_id = pf.id)) END AS alert_count,
+            -- Alerts where a person confirmed the link (the rest are suggestions from the import)
+            CASE WHEN $2 THEN (SELECT COUNT(DISTINCT l.alert_id)::int FROM alert_product_links l
+             LEFT JOIN products p2 ON p2.id = l.product_id
+             WHERE l.state = 'confirmed' AND (l.family_id = pf.id OR p2.family_id = pf.id)) END AS alert_confirmed,
             CASE WHEN $2 THEN (SELECT COUNT(DISTINCT g.group_id)::int FROM group_product_links g
              LEFT JOIN products p3 ON p3.id = g.product_id
              WHERE g.family_id = pf.id OR p3.family_id = pf.id) END AS group_count,
@@ -26,6 +30,7 @@ export async function GET() {
                 'id', p.id, 'model_code', p.model_code, 'name', p.name, 'description', p.description,
                 'is_active', p.is_active,
                 'alert_count', CASE WHEN $2 THEN (SELECT COUNT(DISTINCT alert_id) FROM alert_product_links WHERE product_id = p.id AND state <> 'rejected') END,
+                'alert_confirmed', CASE WHEN $2 THEN (SELECT COUNT(DISTINCT alert_id) FROM alert_product_links WHERE product_id = p.id AND state = 'confirmed') END,
                 'group_count', CASE WHEN $2 THEN (SELECT COUNT(*) FROM group_product_links WHERE product_id = p.id) END
               ) ORDER BY p.name)
               FROM products p WHERE p.family_id = pf.id

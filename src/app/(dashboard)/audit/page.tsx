@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  History, Bell, Layers, Package, Upload, SlidersHorizontal, Building2, UserRound, Activity, ChevronLeft, ChevronRight, Quote,
+  History, Bell, Layers, Package, Upload, SlidersHorizontal, Building2, UserRound, Activity, FileText, ChevronLeft, ChevronRight, Quote,
 } from "lucide-react";
 import { UserAvatar } from "@/components/ui/brand";
 import { describeEvent, type Described, type Refs } from "@/lib/audit-describe";
@@ -31,6 +31,7 @@ const CATEGORIES: Array<{ key: string; label: string }> = [
   { key: "products", label: "Products" },
   { key: "imports", label: "Imports" },
   { key: "scoring", label: "Scoring" },
+  { key: "reports", label: "Reports" },
   { key: "workspace", label: "Workspace" },
   { key: "account", label: "Accounts" },
 ];
@@ -41,6 +42,7 @@ const CATEGORY_STYLE: Record<Described["category"], { icon: React.ElementType; l
   products: { icon: Package, label: "Product", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30" },
   imports: { icon: Upload, label: "Import", cls: "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/30" },
   scoring: { icon: SlidersHorizontal, label: "Scoring", cls: "bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-500/30" },
+  reports: { icon: FileText, label: "Report", cls: "bg-teal-50 text-teal-700 ring-teal-200 dark:bg-teal-500/10 dark:text-teal-300 dark:ring-teal-500/30" },
   workspace: { icon: Building2, label: "Workspace", cls: "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30" },
   account: { icon: UserRound, label: "Account", cls: "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-700/40 dark:text-slate-300 dark:ring-slate-600" },
   other: { icon: Activity, label: "Other", cls: "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-700/40 dark:text-slate-300 dark:ring-slate-600" },

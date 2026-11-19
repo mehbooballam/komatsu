@@ -28,6 +28,8 @@ interface ParetoChartProps {
   totalScoredCount: number;
   displayedCount: number;
   onBarClick?: (alertId: string) => void;
+  /** Fill the parent's height (full-screen view) instead of a fixed 300px. */
+  fill?: boolean;
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -62,7 +64,7 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Array<
   );
 }
 
-export function ParetoChart({ data, totalSum, onBarClick }: ParetoChartProps) {
+export function ParetoChart({ data, totalSum, onBarClick, fill = false }: ParetoChartProps) {
   if (!data || data.length === 0) {
     return (
       <div className="flex h-64 flex-col items-center justify-center text-slate-400">
@@ -73,11 +75,12 @@ export function ParetoChart({ data, totalSum, onBarClick }: ParetoChartProps) {
   }
 
   const rows: Row[] = data.map((d, i) => ({ ...d, rank: i + 1 }));
-  const tickEvery = rows.length > 25 ? 5 : rows.length > 12 ? 2 : 1;
+  const tickEvery = rows.length > 100 ? 10 : rows.length > 25 ? 5 : rows.length > 12 ? 2 : 1;
 
   return (
-    <div>
-      <ResponsiveContainer width="100%" height={300}>
+    <div className={fill ? "flex h-full flex-col" : undefined}>
+      <div className={fill ? "min-h-0 flex-1" : undefined}>
+      <ResponsiveContainer width="100%" height={fill ? "100%" : 300}>
         <ComposedChart data={rows} margin={{ top: 8, right: 4, left: -12, bottom: 0 }} barCategoryGap="18%">
           <defs>
             <linearGradient id="paretoLine" x1="0" y1="0" x2="1" y2="0">
@@ -139,6 +142,7 @@ export function ParetoChart({ data, totalSum, onBarClick }: ParetoChartProps) {
           />
         </ComposedChart>
       </ResponsiveContainer>
+      </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 dark:text-slate-400">
         <div className="flex flex-wrap items-center gap-3">

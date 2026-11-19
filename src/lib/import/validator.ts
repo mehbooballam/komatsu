@@ -2,9 +2,13 @@ import {
   VALID_RATINGS,
   FACTOR_COLUMNS,
   PLACEHOLDER_RATIONALE_PATTERN,
+  parseHumanReview,
+  CONFIDENCE_COLUMNS,
+  CONTEXT_TEXT_COLUMNS,
   type ImportColumnName,
 } from "./constants";
 import type { ParsedRow } from "./parser-xlsx";
+import { normalizeConfidence } from "@/lib/scoring/confidence";
 
 export interface FieldError {
   field: string;
@@ -136,8 +140,19 @@ export function validateRows(rows: ParsedRow[]): ValidationResult {
     if (row.mapped.timing) parsed.timing = row.mapped.timing;
     if (row.mapped.change_type) parsed.change_type = row.mapped.change_type;
     if (row.mapped.deadline_description) parsed.deadline_description = row.mapped.deadline_description;
+    for (const col of CONTEXT_TEXT_COLUMNS) {
+      const v = row.mapped[col];
+      if (v && v.trim()) parsed[col] = v.trim();
+    }
     if (row.mapped.category_algorithm_defined) {
       parsed.category_algorithm_defined = row.mapped.category_algorithm_defined;
+    }
+    // Need Human Review: { flag, reason } or null when the cell is blank
+    parsed.needs_human_review = parseHumanReview(row.mapped.needs_human_review);
+    // Per-factor confidence: "High" / "Medium" / "Low" or "85%"
+    for (const col of Object.values(CONFIDENCE_COLUMNS)) {
+      const conf = normalizeConfidence(row.mapped[col]);
+      if (conf) parsed[col] = conf;
     }
 
     if (row.mapped.published_on) {
@@ -154,17 +169,17 @@ export function validateRows(rows: ParsedRow[]): ValidationResult {
       }
     }
 
-    if (row.mapped.deadline_date) {
-      const result = parseDate(row.mapped.deadline_date);
+    if (row.mapped.compliance_deadline) {
+      const result = parseDate(row.mapped.compliance_deadline);
       if (result.valid) {
-        parsed.deadline_date = result.date;
+        parsed.compliance_deadline = result.date;
       } else {
         warnings.push({
-          field: "deadline_date",
-          message: `Ambiguous or invalid date: "${row.mapped.deadline_date}"`,
+          field: "compliance_deadline",
+          message: `Ambiguous or invalid date: "${row.mapped.compliance_deadline}"`,
           severity: "warning",
         });
-        parsed.deadline_date = row.mapped.deadline_date;
+        parsed.compliance_deadline = row.mapped.compliance_deadline;
       }
     }
 

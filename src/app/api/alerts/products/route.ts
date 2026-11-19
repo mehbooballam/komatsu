@@ -3,8 +3,17 @@ import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent, type AuthContext } from "@/lib/auth-helpers";
 import { alertProducts, resolveTarget } from "@/lib/products";
 import { ALERT_UUID, accessibleAlertIds, alertNotFound, canAccessAlert } from "@/lib/alerts/access";
+import { addChangeNotes, commentRequired, readChangeComment } from "@/lib/change-notes";
 
 const MAX_ALERTS = 500;
+
+async function productName(col: "family_id" | "product_id", id: string) {
+  const res = await query(
+    col === "family_id" ? `SELECT name FROM product_families WHERE id = $1` : `SELECT name FROM products WHERE id = $1`,
+    [id]
+  );
+  return res.rows[0]?.name ?? "product";
+}
 
 /** GET ?alert_id=… — products that apply to an alert (its own plus those from its groups). */
 export async function GET(request: NextRequest) {
@@ -40,6 +49,8 @@ export async function POST(request: NextRequest) {
   const target = await resolveTarget(auth.company_id, body);
   if ("error" in target) return NextResponse.json(target, { status: 400 });
   const col = target.kind === "family" ? "family_id" : "product_id";
+  const comment = readChangeComment(request, body);
+  if (!comment) return commentRequired();
 
   // Re-confirm an existing link (suggested or previously removed) …
   const updated = await query(
@@ -64,8 +75,10 @@ export async function POST(request: NextRequest) {
     await createAuditEvent(auth.company_id, auth.membership_id, "attach_product", "alert", id, null, {
       alert_id: id,
       [col]: target.id,
-    });
+    }, comment);
   }
+  await addChangeNotes(auth.company_id, ids, auth.membership_id,
+    `Product attached: ${await productName(col, target.id)}${target.kind === "family" ? " (whole family)" : ""}`, comment);
   return NextResponse.json({ success: true, attached: ids.length });
 }
 
@@ -84,6 +97,8 @@ export async function DELETE(request: NextRequest) {
   const col = familyId ? "family_id" : "product_id";
   const targetId = (familyId || productId)!;
   if (!ALERT_UUID.test(targetId)) return NextResponse.json({ error: "Product not found" }, { status: 400 });
+  const comment = readChangeComment(request, body);
+  if (!comment) return commentRequired();
 
   await query(
     `DELETE FROM alert_product_links
@@ -97,7 +112,8 @@ export async function DELETE(request: NextRequest) {
   );
 
   for (const id of ids) {
-    await createAuditEvent(auth.company_id, auth.membership_id, "detach_product", "alert", id, { alert_id: id, [col]: targetId }, null);
+    await createAuditEvent(auth.company_id, auth.membership_id, "detach_product", "alert", id, { alert_id: id, [col]: targetId }, null, comment);
   }
+  await addChangeNotes(auth.company_id, ids, auth.membership_id, `Product removed: ${await productName(col, targetId)}`, comment);
   return NextResponse.json({ success: true });
 }

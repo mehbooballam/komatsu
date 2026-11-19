@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
+import { ImportPreview } from "@/components/imports/import-preview";
 
 interface ImportBatch {
   id: string;
@@ -12,47 +13,6 @@ interface ImportBatch {
   createdAt: string;
 }
 
-interface PreviewData {
-  batch_id: string;
-  columns: string[];
-  sample_rows: Record<string, unknown>[];
-  counts: { total: number; new: number; changed: number; unchanged: number; invalid: number };
-  errors: Array<{ row: number; field: string; message: string }>;
-}
-
-interface PreviewApiRow {
-  rowNumber: number;
-  state: string;
-  alertStatus: "new" | "existing";
-  errors: Array<{ field: string; message: string }>;
-  raw: Record<string, unknown> | null;
-}
-
-interface PreviewApiResponse {
-  batch: { id: string };
-  counts: { total?: number; invalid?: number };
-  rows: PreviewApiRow[];
-}
-
-// Adapts GET /api/imports/[id]/preview to the shape the preview modal renders.
-function toPreviewData(data: PreviewApiResponse): PreviewData {
-  const rows = data.rows || [];
-  const valid = rows.filter((r) => r.state === "valid");
-  return {
-    batch_id: data.batch.id,
-    columns: rows[0]?.raw ? Object.keys(rows[0].raw) : [],
-    sample_rows: rows.map((r) => r.raw || {}),
-    counts: {
-      total: data.counts?.total ?? rows.length,
-      new: valid.filter((r) => r.alertStatus === "new").length,
-      changed: valid.filter((r) => r.alertStatus === "existing").length,
-      unchanged: 0,
-      invalid: rows.filter((r) => r.state === "invalid").length,
-    },
-    errors: rows.flatMap((r) => (r.errors || []).map((e) => ({ row: r.rowNumber, field: e.field, message: e.message }))),
-  };
-}
-
 interface Notice {
   kind: "success" | "warning" | "error";
   title: string;
@@ -61,6 +21,8 @@ interface Notice {
   errors?: string[];
   showAlertsLink?: boolean;
   products?: { linked: number; alerts_matched: number; unmatched: Array<{ label: string; alerts: number }> };
+  /** From the Needs Human Review column */
+  humanReview?: { flagged: number; cleared: number };
 }
 
 const NOTICE_STYLES: Record<Notice["kind"], string> = {
@@ -94,19 +56,37 @@ function NoticeBanner({ notice, onClose }: { notice: Notice; onClose: () => void
               {notice.errors.length > 5 && <li>… and {notice.errors.length - 5} more</li>}
             </ul>
           )}
+          {notice.humanReview && (notice.humanReview.flagged > 0 || notice.humanReview.cleared > 0) && (
+            <div className="mt-3 rounded-lg bg-white/70 px-3 py-2.5 text-xs dark:bg-slate-900/40">
+              <p className="font-semibold">Needs human review</p>
+              {notice.humanReview.flagged > 0 && (
+                <p className="mt-0.5 opacity-90">
+                  {notice.humanReview.flagged} alert{notice.humanReview.flagged === 1 ? " was" : "s were"} marked <strong>Needs review</strong> by the file.{" "}
+                  <Link href="/alerts?human_review=true" className="font-medium underline underline-offset-2 hover:opacity-80">
+                    Review them →
+                  </Link>
+                </p>
+              )}
+              {notice.humanReview.cleared > 0 && (
+                <p className="mt-0.5 opacity-90">
+                  {notice.humanReview.cleared} alert{notice.humanReview.cleared === 1 ? " no longer needs" : "s no longer need"} review (the file now says No).
+                </p>
+              )}
+            </div>
+          )}
           {notice.products && (notice.products.alerts_matched > 0 || notice.products.unmatched.length > 0) && (
             <div className="mt-3 rounded-lg bg-white/70 px-3 py-2.5 text-xs dark:bg-slate-900/40">
               <p className="font-semibold">Products</p>
               {notice.products.alerts_matched > 0 && (
                 <p className="mt-0.5 opacity-90">
-                  {notice.products.alerts_matched} alert{notice.products.alerts_matched === 1 ? "" : "s"} matched to your product inventory
+                  {notice.products.alerts_matched} alert{notice.products.alerts_matched === 1 ? "" : "s"} matched to your products
                   (added as suggestions to confirm).
                 </p>
               )}
               {notice.products.unmatched.length > 0 && (
                 <>
                   <p className="mt-1 opacity-90">
-                    Not in the inventory — left untagged so you can create them or tag the alerts yourself:
+                    Not in Products — left untagged so you can create them or tag the alerts yourself:
                   </p>
                   <ul className="mt-1 flex flex-wrap gap-1.5">
                     {notice.products.unmatched.slice(0, 12).map((u) => (
@@ -117,7 +97,7 @@ function NoticeBanner({ notice, onClose }: { notice: Notice; onClose: () => void
                     {notice.products.unmatched.length > 12 && <li className="px-1 py-0.5 opacity-70">+{notice.products.unmatched.length - 12} more</li>}
                   </ul>
                   <Link href="/products" className="mt-2 inline-block font-medium underline underline-offset-2 hover:opacity-80">
-                    Open Product Inventory →
+                    Open Products →
                   </Link>
                 </>
               )}
@@ -143,8 +123,9 @@ export default function ImportsPage() {
   const [batches, setBatches] = useState<ImportBatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [preview, setPreview] = useState<PreviewData | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  // Batch open in the preview (just uploaded, or reopened from the history)
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -196,13 +177,7 @@ export default function ImportsPage() {
         setNotice({ kind: "error", title: data.error || "Upload failed", detail: data.details });
         return;
       }
-      const previewRes = await fetch(`/api/imports/${data.batchId}/preview`);
-      const previewJson = await previewRes.json();
-      if (!previewRes.ok) {
-        setNotice({ kind: "error", title: previewJson.error || "Could not load preview" });
-        return;
-      }
-      setPreview(toPreviewData(previewJson));
+      setPreviewId(data.batchId);
       loadBatches();
     } catch {
       setNotice({ kind: "error", title: "Upload failed", detail: "Check your connection and try again." });
@@ -212,37 +187,40 @@ export default function ImportsPage() {
     }
   }
 
-  async function handleConfirm() {
-    if (!preview) return;
-    setConfirming(true);
+  function showResult(data: { counts?: Record<string, unknown> }) {
+    const c = (data.counts || {}) as {
+      created?: number; updated?: number; unchanged?: number; skipped?: number;
+      errors?: Array<{ rowNumber: number; message: string }>;
+      products?: Notice["products"]; human_review?: Notice["humanReview"];
+    };
+    const rowErrors = c.errors || [];
+    setNotice({
+      kind: rowErrors.length ? "warning" : "success",
+      title: "Import complete",
+      stats: [
+        { label: "Created", value: c.created ?? 0 },
+        { label: "Updated", value: c.updated ?? 0 },
+        { label: "Unchanged", value: c.unchanged ?? 0 },
+        { label: "Skipped", value: c.skipped ?? 0 },
+      ],
+      errors: rowErrors.map((e) => (e.rowNumber ? `Row ${e.rowNumber}: ${e.message}` : e.message)),
+      showAlertsLink: (c.created ?? 0) + (c.updated ?? 0) > 0,
+      products: c.products,
+      humanReview: c.human_review,
+    });
+    setPreviewId(null);
+    loadBatches();
+  }
+
+  async function cancelBatch(b: ImportBatch) {
+    if (!window.confirm(`Cancel the import of “${b.filename}”? The uploaded file is removed; nothing has been imported from it.`)) return;
+    setCancelling(b.id);
     try {
-      const res = await fetch(`/api/imports/${preview.batch_id}/confirm`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        setNotice({ kind: "error", title: data.error || "Import failed", detail: data.details });
-        setPreview(null);
-        return;
-      }
-      const c = data.counts || {};
-      const rowErrors: Array<{ rowNumber: number; message: string }> = c.errors || [];
-      setNotice({
-        kind: rowErrors.length ? "warning" : "success",
-        title: "Import complete",
-        stats: [
-          { label: "Created", value: c.created ?? 0 },
-          { label: "Updated", value: c.updated ?? 0 },
-          { label: "Unchanged", value: c.unchanged ?? 0 },
-          { label: "Skipped", value: c.skipped ?? 0 },
-        ],
-        errors: rowErrors.map((e) => (e.rowNumber ? `Row ${e.rowNumber}: ${e.message}` : e.message)),
-        showAlertsLink: (c.created ?? 0) + (c.updated ?? 0) > 0,
-        products: c.products,
-      });
-      setPreview(null);
-    } catch {
-      setNotice({ kind: "error", title: "Import failed", detail: "Check your connection and try again." });
+      const res = await fetch(`/api/imports/${b.id}`, { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      setNotice(res.ok ? { kind: "success", title: `Cancelled the import of ${b.filename}` } : { kind: "error", title: body.error || "Could not cancel the import" });
     } finally {
-      setConfirming(false);
+      setCancelling(null);
       loadBatches();
     }
   }
@@ -307,62 +285,21 @@ export default function ImportsPage() {
         )}
       </div>
 
-      {/* Preview dialog */}
-      {preview && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-slate-200 dark:border-slate-700">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Import preview</h2>
-              <div className="flex gap-4 mt-3 text-sm">
-                <span className="text-green-600 dark:text-green-400">New: {preview.counts.new}</span>
-                <span className="text-blue-600 dark:text-blue-400">Changed: {preview.counts.changed}</span>
-                <span className="text-slate-500">Unchanged: {preview.counts.unchanged}</span>
-                <span className="text-red-600 dark:text-red-400">Invalid: {preview.counts.invalid}</span>
-                <span className="font-medium text-slate-900 dark:text-white">Total: {preview.counts.total}</span>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto p-6">
-              {preview.errors.length > 0 && (
-                <div className="mb-4 bg-red-50 dark:bg-red-900/20 rounded-lg p-4">
-                  <h3 className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">Validation issues</h3>
-                  <ul className="text-xs space-y-1 text-red-600 dark:text-red-300">
-                    {preview.errors.slice(0, 10).map((err, i) => (
-                      <li key={i}>Row {err.row}: {err.field} — {err.message}</li>
-                    ))}
-                    {preview.errors.length > 10 && <li>... and {preview.errors.length - 10} more</li>}
-                  </ul>
-                </div>
-              )}
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200 dark:border-slate-700">
-                      {preview.columns.slice(0, 8).map((col) => (
-                        <th key={col} className="text-left px-2 py-1.5 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">{col}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.sample_rows.slice(0, 10).map((row, i) => (
-                      <tr key={i} className="border-b border-slate-100 dark:border-slate-700">
-                        {preview.columns.slice(0, 8).map((col) => (
-                          <td key={col} className="px-2 py-1.5 text-slate-700 dark:text-slate-300 max-w-[200px] truncate">{String(row[col] ?? "")}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex gap-3 justify-end">
-              <button onClick={() => setPreview(null)} className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">Cancel</button>
-              <button onClick={handleConfirm} disabled={confirming}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white text-sm font-medium rounded-lg">
-                {confirming ? "Importing..." : `Import ${preview.counts.new + preview.counts.changed} alerts`}
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Preview: column mapping, rows and issues */}
+      {previewId && (
+        <ImportPreview
+          batchId={previewId}
+          onClose={() => {
+            setPreviewId(null);
+            loadBatches();
+          }}
+          onCancelled={(name) => {
+            setPreviewId(null);
+            setNotice({ kind: "success", title: `Cancelled the import of ${name}` });
+            loadBatches();
+          }}
+          onImported={showResult}
+        />
       )}
 
       {/* Import history */}
@@ -383,6 +320,7 @@ export default function ImportsPage() {
                 <th className="text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider px-4 py-3">Status</th>
                 <th className="text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider px-4 py-3 hidden md:table-cell">Rows</th>
                 <th className="text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider px-4 py-3 hidden lg:table-cell">Date</th>
+                <th className="px-4 py-3"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
@@ -402,6 +340,27 @@ export default function ImportsPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400 hidden lg:table-cell">
                     {new Date(b.createdAt).toLocaleDateString()}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {b.status === "previewing" && (
+                        <button
+                          onClick={() => setPreviewId(b.id)}
+                          className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+                        >
+                          Review &amp; import
+                        </button>
+                      )}
+                      {["previewing", "failed", "validating", "uploading"].includes(b.status) && (
+                        <button
+                          onClick={() => cancelBatch(b)}
+                          disabled={cancelling === b.id}
+                          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-slate-600 dark:hover:bg-red-500/10"
+                        >
+                          {cancelling === b.id ? "Cancelling…" : b.status === "failed" ? "Remove" : "Cancel import"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

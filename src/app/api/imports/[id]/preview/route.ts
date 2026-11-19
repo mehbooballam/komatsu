@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { canImport, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
+import { autoMapping, batchHeaders, cleanMapping, mappingProblems, mappingTargets, skipReason } from "@/lib/import/mapping";
 
 export async function GET(
   _request: NextRequest,
@@ -51,7 +52,36 @@ export async function GET(
   const newCount = rows.filter((r) => r.alertStatus === "new" && r.state === "valid").length;
   const updateCount = rows.filter((r) => r.alertStatus === "existing" && r.state === "valid").length;
 
+  // Every column in the file: where it is mapped, the automatic suggestion, and sample values
+  const headers = batchHeaders(batch);
+  const mapping = cleanMapping(batch.column_mapping, headers);
+  const auto = autoMapping(headers);
+  const columns = headers.map((h) => {
+    const values = rows.map((r) => (r.raw ? r.raw[h] : undefined));
+    const present = values.some((v) => v !== undefined);
+    const filled = values.filter((v) => typeof v === "string" && v.trim() !== "");
+    return {
+      header: h,
+      target: mapping[h],
+      auto: auto[h],
+      // Files uploaded before every column was kept have no values for unmapped columns
+      has_data: present,
+      filled: filled.length,
+      samples: [...new Set(filled.map((v) => String(v).trim()))].slice(0, 3).map((v) => (v.length > 160 ? v.slice(0, 157) + "…" : v)),
+      note: skipReason(h),
+    };
+  });
+  const profileRes = batch.mapping_profile_id
+    ? await query(`SELECT id, name FROM import_mapping_profiles WHERE id = $1`, [batch.mapping_profile_id])
+    : null;
+
   return NextResponse.json({
+    mapping: {
+      columns,
+      targets: mappingTargets(),
+      problems: mappingProblems(mapping),
+      profile: profileRes?.rows[0] ?? null,
+    },
     batch: {
       id: batch.id,
       filename: batch.original_filename,

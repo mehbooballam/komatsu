@@ -2,8 +2,9 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Save, SlidersHorizontal, Building2, Upload, ImageIcon, RotateCcw, Calculator, History, ShieldAlert, Check, Loader2, Info, Lock,
+  Save, SlidersHorizontal, Building2, Upload, ImageIcon, RotateCcw, Calculator, History, ShieldAlert, Check, Loader2, Info, Lock, Sparkles,
 } from "lucide-react";
+import { AiGroupingSettings } from "@/components/settings/ai-grouping-settings";
 import { useSessionInfo, useRefreshSession } from "@/components/layout/session-context";
 import { ImageUpload } from "@/components/ui/image-upload";
 import { ConfirmDialog } from "@/components/alerts/confirm-dialog";
@@ -602,10 +603,18 @@ const TABS = [
   { key: "scoring", label: "Scoring policy", icon: SlidersHorizontal },
   { key: "general", label: "Workspace", icon: Building2 },
   { key: "imports", label: "Imports", icon: Upload },
+  { key: "ai", label: "AI grouping", icon: Sparkles },
 ] as const;
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("scoring");
+  const session = useSessionInfo();
+  const isAdmin = session?.membership.role === "company_admin";
+  // Open a tab from the link, e.g. /settings?tab=ai
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t && TABS.some((x) => x.key === t)) setTab(t as (typeof TABS)[number]["key"]); // eslint-disable-line react-hooks/set-state-in-effect
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -630,6 +639,7 @@ export default function SettingsPage() {
 
       {tab === "scoring" && <ScoringPolicyEditor />}
       {tab === "general" && <GeneralSettings />}
+      {tab === "ai" && (isAdmin ? <AiGroupingSettings canEdit /> : <p className="panel p-6 text-sm text-[var(--muted-foreground)]">Only administrators can see and change the AI grouping settings.</p>)}
       {tab === "imports" && (
         <Section title="Imports" subtitle="How alert files are read" icon={Upload}>
           <dl className="grid max-w-2xl gap-4 text-sm">
@@ -645,7 +655,7 @@ export default function SettingsPage() {
             </div>
             <div>
               <dt className="font-medium">Formats</dt>
-              <dd className="text-[var(--muted-foreground)]">Excel (.xlsx) and CSV with the 27-column Daptic layout — download a template on the Imports page.</dd>
+              <dd className="text-[var(--muted-foreground)]">Excel (.xlsx) and CSV with the Daptic column layout — download a template on the Imports page.</dd>
             </div>
           </dl>
         </Section>

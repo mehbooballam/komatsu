@@ -2,7 +2,8 @@ import type { AuthMembership } from "./middleware";
 
 type Role = AuthMembership["role"];
 
-const EDITING_ROLES: Role[] = ["company_admin", "manager", "reviewer"];
+/** Roles that may change alerts, groups and products. Reviewers and risk owners are read-only. */
+const EDITING_ROLES: Role[] = ["company_admin", "manager"];
 const IMPORT_ROLES: Role[] = ["company_admin", "manager"];
 const ADMIN_ROLES: Role[] = ["company_admin"];
 
@@ -20,6 +21,11 @@ export function canImport(role: Role): boolean {
 
 export function canEditAlerts(role: Role): boolean {
   return EDITING_ROLES.includes(role);
+}
+
+/** Same rule for code that only has the role as a string (e.g. in the browser). */
+export function canMakeChanges(role: string | null | undefined): boolean {
+  return role === "company_admin" || role === "manager";
 }
 
 export function canEditRatings(role: Role): boolean {

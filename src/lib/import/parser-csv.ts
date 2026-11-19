@@ -29,11 +29,13 @@ export function parseCsv(buffer: Buffer): ParseResult {
   const duplicateHeaders: string[] = [];
   const seenMapped = new Set<ImportColumnName>();
 
-  const headerColMap: { col: number; rawHeader: string; mapped: ImportColumnName }[] = [];
+  const headerColMap: { col: number; rawHeader: string; mapped: ImportColumnName | null }[] = [];
+  const seenHeaders = new Set<string>();
 
   for (let i = 0; i < rawHeaders.length; i++) {
     const rawHeader = rawHeaders[i];
-    if (!rawHeader) continue;
+    if (!rawHeader || seenHeaders.has(rawHeader)) continue;
+    seenHeaders.add(rawHeader);
 
     detectedHeaders.push(rawHeader);
     const mapped = normalizeHeader(rawHeader);
@@ -52,6 +54,8 @@ export function parseCsv(buffer: Buffer): ParseResult {
       unmappedHeaders.push(rawHeader);
       mappedHeaders[rawHeader] = null;
     }
+    // Keep the raw value of every column, mapped or not
+    if (!headerColMap.some((h) => h.rawHeader === rawHeader)) headerColMap.push({ col: i, rawHeader, mapped: mappedHeaders[rawHeader] });
   }
 
   const rows: ParsedRow[] = [];
@@ -64,22 +68,12 @@ export function parseCsv(buffer: Buffer): ParseResult {
 
     for (const hcm of headerColMap) {
       const value = hcm.col < record.length ? record[hcm.col] : undefined;
-
+      const trimmed = value === undefined ? "" : value.trim();
+      raw[hcm.rawHeader] = value === undefined ? null : value;
+      if (trimmed !== "") isEmptyRow = false;
+      if (!hcm.mapped) continue;
       presentColumns.add(hcm.mapped);
-
-      if (value === undefined) {
-        raw[hcm.rawHeader] = null;
-        mapped[hcm.mapped] = null;
-      } else {
-        const trimmed = value.trim();
-        raw[hcm.rawHeader] = value;
-        if (trimmed !== "") {
-          isEmptyRow = false;
-          mapped[hcm.mapped] = trimmed;
-        } else {
-          mapped[hcm.mapped] = null;
-        }
-      }
+      mapped[hcm.mapped] = trimmed !== "" ? trimmed : null;
     }
 
     if (isEmptyRow) continue;
@@ -94,6 +88,7 @@ export function parseCsv(buffer: Buffer): ParseResult {
 
   return {
     rows,
+    headers: headerColMap.map((h) => h.rawHeader),
     worksheetName: "CSV",
     headerRow: 1,
     detectedHeaders,

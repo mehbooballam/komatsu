@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { X, CalendarPlus, CheckCircle2, Loader2, Trash2, Check, CalendarClock, AlertTriangle } from "lucide-react";
+import { askChangeComment } from "@/components/layout/change-comment";
 
 interface Deadline {
   id: string;
@@ -102,16 +103,20 @@ export function DeadlineDialog({ alertId, alertTitle, onClose, onChanged, canEdi
   }, [alertId]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !busy && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !e.defaultPrevented && !busy && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [busy, onClose]);
 
-  async function call(label: string, key: string, init: RequestInit) {
+  async function call(label: string, key: string, init: RequestInit, action: string = label) {
+    // Every change needs a comment; it is saved in the alert's Notes with the action
+    const comment = await askChangeComment({ action });
+    if (!comment) return false;
     setBusy(key);
     setError(null);
     try {
-      const res = await fetch(`/api/alerts/${alertId}/deadline`, { headers: { "Content-Type": "application/json" }, ...init });
+      const payload = JSON.stringify({ ...JSON.parse(String(init.body || "{}")), comment });
+      const res = await fetch(`/api/alerts/${alertId}/deadline`, { headers: { "Content-Type": "application/json" }, ...init, body: payload });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `${label} failed`);
       await load();
@@ -140,7 +145,7 @@ export function DeadlineDialog({ alertId, alertTitle, onClose, onChanged, canEdi
         applies_to: note.trim() || null,
         verification_state: confirmed ? "verified" : "unverified",
       }),
-    });
+    }, `Add deadline ${date}${confirmed ? " (verified)" : ""}`);
     if (ok) {
       setDate("");
       setNote("");

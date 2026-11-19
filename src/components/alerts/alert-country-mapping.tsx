@@ -5,6 +5,7 @@ import { MapPin, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { askChangeComment } from "@/components/layout/change-comment";
 
 interface MappingOptions {
   /** Continents (level "region") first, then countries */
@@ -128,13 +129,17 @@ function CountryMappingForm({ alertId, alertTitle, jurisdiction, onClose, onSave
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!options || !hasChanges || saving || needsReload) return;
+    const comment = await askChangeComment({
+      action: selected.size ? `Set countries to ${[...selected].sort().join(", ")}` : "Clear the country mapping",
+    });
+    if (!comment) return;
     setSaving(true);
     setError(null);
     try {
       const response = await fetch(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ country_codes: [...selected], expected_country_codes: options.manual_codes }),
+        body: JSON.stringify({ country_codes: [...selected], expected_country_codes: options.manual_codes, comment }),
       });
       if (!response.ok) {
         if (response.status === 409) setNeedsReload(true);

@@ -5,6 +5,7 @@ import { ALERT_UUID, alertNotFound, alertScopeSql, canAccessAlert } from "@/lib/
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { loadGroupTree } from "@/lib/groups";
 import { alertProducts } from "@/lib/products";
+import { addChangeNotes, commentRequired, readChangeComment } from "@/lib/change-notes";
 
 export async function GET(
   _request: NextRequest,
@@ -25,13 +26,19 @@ export async function GET(
        rg.title AS group_title,
        rg.owner_membership_id AS group_owner_id,
        owner_u.display_name AS direct_owner_name,
-       group_owner_u.display_name AS group_owner_name
+       group_owner_u.display_name AS group_owner_name,
+       hr_flag_u.display_name AS human_review_flagged_by_name,
+       hr_clear_u.display_name AS human_review_cleared_by_name
      FROM alerts a
      LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id AND rg.company_id = a.company_id
      LEFT JOIN memberships owner_m ON owner_m.id = a.direct_owner_membership_id AND owner_m.company_id = a.company_id
      LEFT JOIN user_profiles owner_u ON owner_u.id = owner_m.user_id
      LEFT JOIN memberships group_owner_m ON group_owner_m.id = rg.owner_membership_id AND group_owner_m.company_id = a.company_id
      LEFT JOIN user_profiles group_owner_u ON group_owner_u.id = group_owner_m.user_id
+     LEFT JOIN memberships hr_flag_m ON hr_flag_m.id = a.human_review_flagged_by
+     LEFT JOIN user_profiles hr_flag_u ON hr_flag_u.id = hr_flag_m.user_id
+     LEFT JOIN memberships hr_clear_m ON hr_clear_m.id = a.human_review_cleared_by
+     LEFT JOIN user_profiles hr_clear_u ON hr_clear_u.id = hr_clear_m.user_id
      WHERE a.id = $1 AND a.company_id = $2 AND a.archived_at IS NULL AND ${scope}`,
     values
   );
@@ -150,6 +157,19 @@ export async function GET(
       source_name: alert.source_name,
       source_url: alert.source_url,
       topic_match: alert.topic_match,
+      // Feed context columns (summary + details per topic)
+      category_user_defined: alert.category_user_defined,
+      key_dates: alert.key_dates,
+      date_relevance: alert.date_relevance,
+      status_summary: alert.status_summary,
+      status_details: alert.status_details,
+      timing_summary: alert.timing_summary,
+      timing_details: alert.timing_details,
+      change_summary: alert.change_summary,
+      change_details: alert.change_details,
+      source_context: alert.source_context,
+      source_context_summary: alert.source_context_summary,
+      source_context_details: alert.source_context_details,
       local_state: alert.local_state,
       record_version: alert.record_version,
       group_id: alert.primary_group_id,
@@ -157,6 +177,30 @@ export async function GET(
       group_path: alert.primary_group_id
         ? (await loadGroupTree(companyId)).find((g) => g.id === alert.primary_group_id)?.path ?? [alert.group_title]
         : null,
+      // Regulatory family grouping: Version type (level 3) and why the alert is in its group
+      version_type: alert.version_type,
+      grouping: {
+        method: alert.grouping_method,
+        confidence: alert.grouping_confidence,
+        basis: alert.grouping_basis,
+        reviewed: alert.grouping_reviewed,
+      },
+      identifiers: (
+        await query(
+          `SELECT kind, value, source FROM alert_identifiers WHERE alert_id = $1 AND company_id = $2 ORDER BY kind, value`,
+          [id, companyId]
+        )
+      ).rows,
+      // Needs human review: from the import's needs_human_review column (flagged_by null) or flagged by a person
+      human_review: {
+        required: !!alert.human_review_required,
+        reason: alert.human_review_reason,
+        from_import: alert.human_review_flagged_at != null && alert.human_review_flagged_by == null,
+        flagged_at: alert.human_review_flagged_at,
+        flagged_by_name: alert.human_review_flagged_by_name,
+        cleared_at: alert.human_review_cleared_at,
+        cleared_by_name: alert.human_review_cleared_by_name,
+      },
       ownership: {
         type: ownershipType,
         effective_owner_id: effectiveOwnerMembershipId,
@@ -171,6 +215,17 @@ export async function GET(
     deadlines: deadlines.rows,
     source_revisions: sourceRevisions.rows,
     source_factors: sourceFactors,
+    // Confidence set by a person per factor (wins over source_factors[].confidence)
+    factor_confidence: (
+      await query(
+        `SELECT fc.factor_key, fc.confidence, fc.set_at, up.display_name AS set_by_name
+         FROM alert_factor_confidence fc
+         LEFT JOIN memberships m ON m.id = fc.set_by
+         LEFT JOIN user_profiles up ON up.id = m.user_id
+         WHERE fc.alert_id = $1 AND fc.company_id = $2`,
+        [id, companyId]
+      )
+    ).rows,
     active_overrides: overridesRes.rows,
     // Raw links (incl. rejected import suggestions) and the products that actually apply
     product_links: products.rows,
@@ -201,6 +256,8 @@ export async function PUT(
   const companyId = auth.company_id;
   if (!(await canAccessAlert(auth, id))) return alertNotFound();
   const body = await request.json();
+  const comment = readChangeComment(request, body) || (typeof body.reason === "string" ? body.reason.trim() : "");
+  if (!comment) return commentRequired();
 
   if (body.direct_owner_membership_id !== undefined) {
     if (!canAssign(auth.role)) return forbidden();
@@ -259,8 +316,14 @@ export async function PUT(
     await query(
       `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, before_values, after_values, reason)
        VALUES ($1, $2, 'alert_updated', 'alert', $3, $4, $5, $6)`,
-      [companyId, auth.membership_id, id, JSON.stringify(body._before || {}), JSON.stringify(body), body.reason || null]
+      [companyId, auth.membership_id, id, JSON.stringify(body._before || {}), JSON.stringify(body), comment]
     );
+    const changed = [
+      body.local_state !== undefined ? `Status set to ${String(body.local_state).replace(/_/g, " ")}` : null,
+      body.primary_group_id !== undefined ? (body.primary_group_id ? "Moved to another group" : "Removed from its group") : null,
+      body.direct_owner_membership_id !== undefined ? (body.direct_owner_membership_id ? "Owner assigned" : "Owner removed") : null,
+    ].filter(Boolean).join("; ");
+    await addChangeNotes(companyId, [id], auth.membership_id, changed || "Alert updated", comment);
 
     return NextResponse.json({ alert: result.rows[0] });
   }

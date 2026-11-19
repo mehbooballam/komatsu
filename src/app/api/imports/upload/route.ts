@@ -7,6 +7,7 @@ import { canImport, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers"
 import { parseXlsx, listWorksheets } from "@/lib/import/parser-xlsx";
 import { parseCsv } from "@/lib/import/parser-csv";
 import { validateRows } from "@/lib/import/validator";
+import { findSavedMapping, mergeWithProfile, rowsFromRaw } from "@/lib/import/mapping";
 
 export async function POST(request: NextRequest) {
   const auth = await getAuth();
@@ -137,7 +138,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const validation = validateRows(parseResult.rows);
+  // Column mapping: a saved mapping for this file layout if there is one, otherwise from the header names
+  const headers = parseResult.headers;
+  const profile = await findSavedMapping(auth.company_id, headers);
+  const mapping = mergeWithProfile(headers, profile);
+  const validation = validateRows(
+    rowsFromRaw(parseResult.rows.map((r) => ({ row_number: r.rowNumber, raw_payload: r.raw })), mapping)
+  );
 
   for (const row of validation.rows) {
     await query(
@@ -157,10 +164,12 @@ export async function POST(request: NextRequest) {
   await query(
     `UPDATE import_batches SET status = 'previewing', selected_worksheet = $4,
      column_mapping = $1,
-     row_counts = $2
+     row_counts = $2,
+     file_headers = $5,
+     mapping_profile_id = $6
      WHERE id = $3`,
     [
-      JSON.stringify(parseResult.mappedHeaders),
+      JSON.stringify(mapping),
       JSON.stringify({
         total: validation.rows.length,
         valid: validation.totalValid,
@@ -169,6 +178,8 @@ export async function POST(request: NextRequest) {
       }),
       batchId,
       ext === ".xlsx" ? parseResult.worksheetName : null,
+      JSON.stringify(headers),
+      profile?.id ?? null,
     ]
   );
 
@@ -190,8 +201,9 @@ export async function POST(request: NextRequest) {
     worksheets,
     selectedWorksheet: parseResult.worksheetName,
     headerRow: parseResult.headerRow,
-    mappedHeaders: parseResult.mappedHeaders,
-    unmappedHeaders: parseResult.unmappedHeaders,
+    mappedHeaders: mapping,
+    unmappedHeaders: headers.filter((h) => !mapping[h]),
+    savedMapping: profile ? { id: profile.id, name: profile.name } : null,
     warnings: parseResult.warnings,
     counts: {
       total: validation.rows.length,

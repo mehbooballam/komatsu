@@ -3,6 +3,7 @@ import { ALERT_UUID, alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 import { alertCountries, alertCountryCodes, saveManualAlertCountries } from "@/lib/alerts/geography-mapping";
 import { canEdit, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
 import { query, transaction } from "@/lib/db";
+import { addChangeNotes, commentRequired, readChangeComment } from "@/lib/change-notes";
 
 function parseCountryCodes(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.length > 250 ||
@@ -34,7 +35,9 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   if (!ALERT_UUID.test(id)) return alertNotFound();
 
-  const body: { country_codes?: unknown; expected_country_codes?: unknown } | null = await request.json().catch(() => null);
+  const body: { country_codes?: unknown; expected_country_codes?: unknown; comment?: unknown } | null = await request.json().catch(() => null);
+  const comment = readChangeComment(request, body);
+  if (!comment) return commentRequired();
   const countryCodes = parseCountryCodes(body?.country_codes);
   const expectedCodes = body?.expected_country_codes === undefined ? undefined : parseCountryCodes(body.expected_country_codes);
   if (!countryCodes || expectedCodes === null) {
@@ -43,5 +46,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
 
   const result = await transaction((client) => saveManualAlertCountries(client, auth, id, countryCodes, expectedCodes));
   if ("error" in result) return NextResponse.json({ error: result.error }, { status: result.status });
+  await addChangeNotes(auth.company_id, [id], auth.membership_id,
+    countryCodes.length ? `Countries set to ${countryCodes.join(", ")}` : "Countries cleared", comment);
   return NextResponse.json(result);
 }

@@ -9,7 +9,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 async function findNote(companyId: string, alertId: string, noteId: string) {
   if (!UUID_RE.test(alertId) || !UUID_RE.test(noteId)) return null;
   const res = await query(
-    `SELECT id, author_membership_id, visibility FROM alert_notes WHERE id = $1 AND alert_id = $2 AND company_id = $3`,
+    `SELECT id, author_membership_id, visibility, kind FROM alert_notes WHERE id = $1 AND alert_id = $2 AND company_id = $3`,
     [noteId, alertId, companyId]
   );
   return res.rows[0] || null;
@@ -27,6 +27,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   if (note.author_membership_id !== auth.membership_id) return forbidden();
+  // A change note is the record of what was done and why — it can't be rewritten
+  if (note.kind === "change") return NextResponse.json({ error: "Change records can't be edited" }, { status: 400 });
 
   const payload = await request.json().catch(() => ({}));
   const body = typeof payload.body === "string" ? payload.body.trim() : undefined;
@@ -57,6 +59,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   if (note.author_membership_id !== auth.membership_id && auth.role !== "company_admin") return forbidden();
+  if (note.kind === "change") return NextResponse.json({ error: "Change records can't be deleted" }, { status: 400 });
 
   await query(`DELETE FROM alert_notes WHERE id = $1`, [noteId]);
   return NextResponse.json({ success: true });

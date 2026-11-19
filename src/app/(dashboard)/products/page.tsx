@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   Plus, Search, ChevronRight, MoreHorizontal, Pencil, Trash2, Archive, ArchiveRestore, Boxes, Package, Loader2, X, Bell, Layers, AlertTriangle,
 } from "lucide-react";
@@ -8,7 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/alerts/confirm-dialog";
 import { useSessionInfo } from "@/components/layout/session-context";
-import { hasCompanyWideAccess } from "@/lib/auth/permissions";
+import { canMakeChanges, hasCompanyWideAccess } from "@/lib/auth/permissions";
 
 interface Model {
   id: string;
@@ -17,6 +18,7 @@ interface Model {
   description: string | null;
   is_active: boolean;
   alert_count: number | null;
+  alert_confirmed?: number | null;
   group_count: number | null;
 }
 
@@ -26,6 +28,7 @@ interface Family {
   description: string | null;
   state: "active" | "archived";
   alert_count: number | null;
+  alert_confirmed?: number | null;
   group_count: number | null;
   products: Model[];
 }
@@ -38,13 +41,38 @@ const inputCls =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white";
 const menuItem = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-800";
 
-function Usage({ alerts, groups }: { alerts: number | null; groups: number | null }) {
-  if (alerts === null || groups === null) return null;
-  if (!alerts && !groups) return <span className="text-xs text-slate-400">Not attached</span>;
+/** Column widths shared by the header and the rows */
+const COL_ALERTS = "w-40 shrink-0";
+const COL_GROUPS = "w-20 shrink-0";
+
+/** Alerts linked to a family or model: opens the Alerts list filtered to it. */
+function AlertsCell({ refKey, name, total, confirmed }: { refKey: string; name: string; total: number | null; confirmed?: number | null }) {
+  if (total === null) return <span className={COL_ALERTS} />;
+  if (!total) return <span className={`${COL_ALERTS} text-right text-xs text-slate-400`}>—</span>;
+  const conf = confirmed ?? 0;
+  const sugg = total - conf;
   return (
-    <span className="inline-flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-      {alerts > 0 && <span className="inline-flex items-center gap-1" title="Alerts this is attached to"><Bell className="h-3 w-3" />{alerts}</span>}
-      {groups > 0 && <span className="inline-flex items-center gap-1" title="Groups this is attached to"><Layers className="h-3 w-3" />{groups}</span>}
+    <span className={`${COL_ALERTS} text-right`}>
+      <Link
+        href={`/alerts?product=${refKey}`}
+        onClick={(e) => e.stopPropagation()}
+        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-sm font-semibold text-slate-900 hover:bg-blue-50 hover:text-blue-700 dark:text-white dark:hover:bg-blue-500/10 dark:hover:text-blue-300"
+        title={`Show the ${total} alerts linked to ${name}`}
+      >
+        <Bell className="h-3.5 w-3.5 text-slate-400" /> {total}
+      </Link>
+      <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+        {conf === 0 ? "all suggested" : sugg === 0 ? "all confirmed" : `${conf} confirmed · ${sugg} suggested`}
+      </span>
+    </span>
+  );
+}
+
+function GroupsCell({ total }: { total: number | null }) {
+  if (total === null) return <span className={COL_GROUPS} />;
+  return (
+    <span className={`${COL_GROUPS} text-right text-sm tabular-nums ${total ? "font-medium text-slate-700 dark:text-slate-200" : "text-xs text-slate-400"}`} title="Regulation groups this is attached to">
+      {total ? <span className="inline-flex items-center gap-1"><Layers className="h-3.5 w-3.5 text-slate-400" /> {total}</span> : "—"}
     </span>
   );
 }
@@ -52,7 +80,7 @@ function Usage({ alerts, groups }: { alerts: number | null; groups: number | nul
 export default function ProductsPage() {
   const session = useSessionInfo();
   const role = session?.membership.role;
-  const canEdit = !!session && hasCompanyWideAccess(session.membership.role, session.membership.access_scope);
+  const canEdit = !!session && canMakeChanges(session.membership.role) && hasCompanyWideAccess(session.membership.role, session.membership.access_scope);
   const canDelete = role === "company_admin" || role === "manager";
 
   const [families, setFamilies] = useState<Family[]>([]);
@@ -219,7 +247,7 @@ export default function ProductsPage() {
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Product Inventory</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Products</h1>
           <p className="mt-1 text-sm text-[var(--muted-foreground)]">
             {families.length} famil{families.length === 1 ? "y" : "ies"} · {totalModels} model{totalModels === 1 ? "" : "s"}
           </p>
@@ -241,7 +269,7 @@ export default function ProductsPage() {
               <AlertTriangle className="h-4 w-4" />
             </span>
             <div className="min-w-0 flex-1">
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Products in imported alerts that aren&apos;t in the inventory</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Imported products not added yet</h2>
               <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
                 These alerts were left untagged. Create the family (alerts are then linked automatically as suggestions), or tag the alerts yourself from the Alerts page.
               </p>
@@ -305,6 +333,14 @@ export default function ProductsPage() {
         ) : shown.length === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-slate-500">Nothing matches “{q}”.</p>
         ) : (
+          <>
+          <div className="hidden items-center gap-3 border-b border-slate-100 bg-slate-50/70 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:flex dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400">
+            <span className="w-7 shrink-0" />
+            <span className="min-w-0 flex-1 pl-12">Product family / model</span>
+            <span className={`${COL_ALERTS} text-right`} title="Alerts linked to the product: suggested from the import file's Product column, or confirmed by a person. Click a number to see them.">Alerts</span>
+            <span className={`${COL_GROUPS} text-right`}>Groups</span>
+            {canEdit && <span className="w-7 shrink-0" />}
+          </div>
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
             {shown.map(({ f, models }) => {
               const open = !!term || expanded.has(f.id);
@@ -331,10 +367,14 @@ export default function ProductsPage() {
                       </span>
                       <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
                         {f.products.length} model{f.products.length === 1 ? "" : "s"}
+                        {f.alert_count ? <span className="sm:hidden"> · {f.alert_count} alerts</span> : null}
                         {f.description ? ` · ${f.description}` : ""}
                       </span>
                     </button>
-                    <span className="hidden sm:block"><Usage alerts={f.alert_count} groups={f.group_count} /></span>
+                    <span className="hidden items-center gap-3 sm:flex">
+                      <AlertsCell refKey={`family:${f.id}`} name={f.name} total={f.alert_count} confirmed={f.alert_confirmed} />
+                      <GroupsCell total={f.group_count} />
+                    </span>
                     {canEdit && (
                       <Popover open={menu === f.id} onOpenChange={(o) => setMenu(o ? f.id : null)}>
                         <PopoverTrigger asChild>
@@ -391,7 +431,10 @@ export default function ProductsPage() {
                                 </p>
                                 {m.description && <p className="truncate text-xs text-slate-500">{m.description}</p>}
                               </div>
-                              <span className="hidden sm:block"><Usage alerts={m.alert_count} groups={m.group_count} /></span>
+                              <span className="hidden items-center gap-3 sm:flex">
+                                <AlertsCell refKey={`model:${m.id}`} name={m.name} total={m.alert_count} confirmed={m.alert_confirmed} />
+                                <GroupsCell total={m.group_count} />
+                              </span>
                               {canEdit && (
                                 <Popover open={menu === m.id} onOpenChange={(o) => setMenu(o ? m.id : null)}>
                                   <PopoverTrigger asChild>
@@ -440,6 +483,7 @@ export default function ProductsPage() {
               );
             })}
           </ul>
+          </>
         )}
       </div>
 

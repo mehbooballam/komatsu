@@ -5,6 +5,14 @@ import { alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 import { recalculateAlert, getAsOfDate } from "@/lib/scoring/recalculate";
 import { VALID_RATINGS } from "@/lib/scoring/engine";
 import { normalizePolicy, MAX_TOTAL } from "@/lib/scoring/policy";
+import { addChangeNotes, commentRequired, readChangeComment } from "@/lib/change-notes";
+
+const TARGET_LABELS: Record<string, string> = {
+  market_access: "Market access",
+  cost_to_implement: "Cost to implement",
+  urgency: "Urgency",
+  total: "Total score",
+};
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -42,7 +50,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
+  if (!["company_admin", "manager"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
@@ -93,6 +101,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
      JSON.stringify({ target, value }), reason]
   );
 
+  // The reason is the person's comment on this change
+  await addChangeNotes(session.membership.company_id, [id], session.membership.id,
+    `Score adjusted: ${TARGET_LABELS[target]} set to ${value}`, String(reason));
+
   const asOfDate = getAsOfDate(session.company.time_zone);
   const result = await recalculateAlert(id, session.membership.company_id, asOfDate, "override");
 
@@ -104,7 +116,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   const { id } = await params;
   const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
+  if (!["company_admin", "manager"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
@@ -114,6 +126,8 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   if (!target || !validTargets.includes(target)) {
     return NextResponse.json({ error: `target must be one of: ${validTargets.join(", ")}` }, { status: 400 });
   }
+  const comment = readChangeComment(request);
+  if (!comment) return commentRequired();
 
   const ended = await query(
     `UPDATE score_overrides SET ended_at = NOW()
@@ -127,9 +141,11 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
 
   await query(
     `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, before_values, after_values, reason)
-     VALUES ($1, $2, 'score_override_cleared', 'alert', $3, $4, '{}', 'Override cleared')`,
-    [session.membership.company_id, session.membership.id, id, JSON.stringify({ target, value: ended.rows[0].value })]
+     VALUES ($1, $2, 'score_override_cleared', 'alert', $3, $4, '{}', $5)`,
+    [session.membership.company_id, session.membership.id, id, JSON.stringify({ target, value: ended.rows[0].value }), comment]
   );
+  await addChangeNotes(session.membership.company_id, [id], session.membership.id,
+    `Score adjustment removed: ${TARGET_LABELS[target]} back to the calculated value`, comment);
 
   const asOfDate = getAsOfDate(session.company.time_zone);
   const result = await recalculateAlert(id, session.membership.company_id, asOfDate, "override_cleared");

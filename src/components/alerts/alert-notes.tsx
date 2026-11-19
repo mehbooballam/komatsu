@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Lock, Users, Loader2, Pencil, Trash2, MessageSquareText, Send } from "lucide-react";
+import { Lock, Users, Loader2, Pencil, Trash2, MessageSquareText, Send, History, Sparkles } from "lucide-react";
 import { UserAvatar } from "@/components/ui/brand";
 
 export interface AlertNote {
@@ -13,6 +13,10 @@ export interface AlertNote {
   author_name: string;
   author_avatar: string | null;
   mine: boolean;
+  /** "change" = a record of a change (action + the comment given); "comment" = a free note */
+  kind?: "comment" | "change";
+  action?: string | null;
+  author_membership_id?: string | null;
 }
 
 const MAX = 5000;
@@ -81,6 +85,7 @@ export function AlertNotes({
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [show, setShow] = useState<"all" | "comment" | "change">("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -185,6 +190,23 @@ export function AlertNotes({
 
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300">{error}</p>}
 
+      {notes && notes.some((n) => n.kind === "change") && (
+        <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium dark:bg-slate-800" role="radiogroup" aria-label="Show">
+          {(["all", "comment", "change"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={show === v}
+              onClick={() => setShow(v)}
+              className={`rounded-md px-2.5 py-1 transition-colors ${show === v ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"}`}
+            >
+              {v === "all" ? "Everything" : v === "comment" ? "Notes" : `Changes (${notes.filter((n) => n.kind === "change").length})`}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Thread */}
       {notes === null ? (
         <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading notes…</div>
@@ -196,9 +218,38 @@ export function AlertNotes({
         </div>
       ) : (
         <ol className="space-y-3">
-          {notes.map((n) => {
+          {notes.filter((n) => show === "all" || (n.kind ?? "comment") === show).map((n) => {
             const isEditing = editing?.id === n.id;
             const ago = timeAgo(n.created_at);
+            if (n.kind === "change") {
+              const system = !n.author_membership_id;
+              return (
+                <li key={n.id} className="flex gap-3">
+                  {system ? (
+                    <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
+                      <Sparkles className="h-4 w-4" />
+                    </span>
+                  ) : (
+                    <UserAvatar name={n.author_name} src={n.author_avatar} className="mt-0.5 h-8 w-8 shrink-0 text-[10px]" />
+                  )}
+                  <div className="min-w-0 flex-1 rounded-xl rounded-tl-sm border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 dark:border-slate-700 dark:bg-slate-800/40">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="text-sm font-semibold text-slate-900 dark:text-white">{n.mine ? "You" : n.author_name}</span>
+                      <time dateTime={n.created_at} title={ago || undefined} className="text-xs text-slate-500">{formatDateTime(n.created_at)}</time>
+                      <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-indigo-50 px-1.5 py-px text-[10px] font-medium text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300">
+                        <History className="h-2.5 w-2.5" /> Change
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Action · </span>{n.action}
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{system ? "Basis · " : "Comment · "}</span>{n.body}
+                    </p>
+                  </div>
+                </li>
+              );
+            }
             return (
               <li key={n.id} className="flex gap-3">
                 <UserAvatar name={n.author_name} src={n.author_avatar} className="mt-0.5 h-8 w-8 shrink-0 text-[10px]" />

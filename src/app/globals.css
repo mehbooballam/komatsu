@@ -192,3 +192,27 @@ body {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+
+/* Printing (monthly reports → "Save as PDF"): only the page content, light theme, no app chrome */
+@media print {
+  @page { margin: 14mm 12mm; }
+  :root, :root[data-theme="dark"] { --background: #fff; }
+  html, body { background: #fff !important; color: #111 !important; }
+  aside, [role="region"][aria-label*="otification"] { display: none !important; }
+  main { padding: 0 !important; }
+  main > div { max-width: none !important; padding: 0 !important; margin: 0 !important; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+@media print {
+  .panel { box-shadow: none !important; }
+}
+
+/* Set just before printing a report so charts re-measure at A4 width (186mm ≈ 703px) */
+html.report-printing aside { display: none !important; }
+html.report-printing main { padding-left: 0 !important; }
+html.report-printing main > div { max-width: 703px !important; padding-left: 0 !important; padding-right: 0 !important; margin: 0 !important; }
+@media print {
+  html.report-printing main > div { max-width: none !important; }
+}
+

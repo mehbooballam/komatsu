@@ -4,16 +4,19 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
-import { WorldMap } from "@/components/dashboard/world-map";
+import { WorldMap, type JurisdictionData, type SubdivisionData } from "@/components/dashboard/world-map";
 import { ParetoChart } from "@/components/dashboard/pareto-chart";
+import { RiskHeatmap, heatmapFocus, type HeatmapData, type HeatmapView } from "@/components/dashboard/risk-heatmap";
 import { AlertsTable, type AlertRow } from "@/components/alerts/alerts-table";
 import { AlertDrawer } from "@/components/alerts/alert-drawer";
 import { useSessionInfo } from "@/components/layout/session-context";
+import { canMakeChanges } from "@/lib/auth/permissions";
 import {
   AlertTriangle, Clock, FileWarning, Layers, Loader2, Upload, ArrowRight,
   Globe2, TrendingUp, RefreshCw, CalendarDays, Flame, ListChecks, CheckCircle2,
-  ChevronRight, UserPlus, Tag, Info,
+  ChevronRight, UserPlus, Tag, Info, Eye,
 } from "lucide-react";
+import { ChartFullscreen, FullscreenButton } from "@/components/dashboard/chart-fullscreen";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type Band = "critical" | "high" | "moderate" | "low" | "unscored";
@@ -43,6 +46,8 @@ interface MapCountry {
 
 interface MapData {
   countries: MapCountry[];
+  subdivisions?: SubdivisionData[];
+  jurisdictions?: JurisdictionData[];
   unmapped_count: number;
 }
 
@@ -114,8 +119,17 @@ const ACTIONS = [
     tone: "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300",
   },
   {
-    key: "review",
+    key: "human_review",
     label: "Needs review",
+    hint: "Flagged for a person to check",
+    query: "human_review=true",
+    href: "/alerts?human_review=true",
+    icon: Eye,
+    tone: "bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300",
+  },
+  {
+    key: "review",
+    label: "Incomplete scores",
     hint: "Missing or incomplete scores",
     query: "needs_review=true",
     href: "/alerts?needs_review=true",
@@ -482,8 +496,25 @@ export default function DashboardPage() {
   const [mixView, setMixView] = useState<"final" | "score">("final");
   const [tableRows, setTableRows] = useState<AlertRow[] | null>(null);
   const [openAlert, setOpenAlert] = useState<string | null>(null);
+  const [heatmap, setHeatmap] = useState<HeatmapData | null>(null);
+  const [heatmapView, setHeatmapView] = useState<HeatmapView>("groups");
+  const [heatmapFull, setHeatmapFull] = useState(false);
+  const [mapFull, setMapFull] = useState(false);
+  const [paretoFull, setParetoFull] = useState(false);
+  // Full screen shows every scored alert, not just the top 50
+  const [paretoAll, setParetoAll] = useState<ParetoData | null>(null);
+
+  const openParetoFull = () => {
+    setParetoFull(true);
+    if (!paretoAll) {
+      fetch("/api/dashboard/pareto?limit=200")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d && setParetoAll(d));
+    }
+  };
   const session = useSessionInfo();
-  const canEdit = session?.membership.role !== "risk_owner";
+  // Reviewers and risk owners can only look
+  const canEdit = canMakeChanges(session?.membership.role);
   const canDelete = session?.membership.role === "company_admin" || session?.membership.role === "manager";
 
   // Loading/error belong to a specific reloadKey, so starting a reload needs no setState
@@ -517,6 +548,7 @@ export default function DashboardPage() {
         setSummary(summaryJson);
         setMapData(mapJson);
         setParetoData(paretoJson);
+        setParetoAll(null);
         if (meRes.ok) {
           const me = await meRes.json();
           if (!cancelled) setUserName((me?.user?.display_name || "").split(" ")[0]);
@@ -546,6 +578,17 @@ export default function DashboardPage() {
     };
   }, [reloadKey]);
 
+  // Risk heatmap (loaded on its own so a failure doesn't blank the dashboard)
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/dashboard/heatmap")
+      .then((r) => (r.ok ? r.json() : { groups: [], alerts: [], not_placed: 0 }))
+      .then((d) => !cancelled && setHeatmap(d));
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
   // Dashboard alerts table
   useEffect(() => {
     let cancelled = false;
@@ -561,6 +604,7 @@ export default function DashboardPage() {
   const goCountry = (code: string) =>
     router.push(code === "unmapped" ? "/alerts?geography=unmapped" : `/alerts?geography=${code}`);
   const goPriority = (band: Band) => router.push(`/alerts?priority=${band}`);
+  const goJurisdiction = (label: string) => router.push(`/alerts?jurisdiction=${encodeURIComponent(label)}`);
 
   if (error) {
     return (
@@ -582,6 +626,23 @@ export default function DashboardPage() {
   const total = summary?.total_alerts ?? 0;
   const highPlus = byBand.critical + byBand.high;
   const isEmpty = !loading && total === 0;
+
+  const heatmapToggle = (
+    <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium dark:bg-slate-800">
+      {(["groups", "alerts"] as const).map((v) => (
+        <button
+          key={v}
+          onClick={() => setHeatmapView(v)}
+          className={`whitespace-nowrap rounded-md px-2.5 py-1 transition-colors ${
+            heatmapView === v ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+          }`}
+        >
+          {v === "groups" ? "Regulation groups" : "Alerts"}
+        </button>
+      ))}
+    </div>
+  );
+  const heatmapSubtitle = `Urgency against resources needed${heatmapView === "groups" ? " · bubble size shows number of alerts" : ""} · from each alert's latest score`;
 
   return (
     <div className="space-y-6">
@@ -673,7 +734,7 @@ export default function DashboardPage() {
                 <p className="text-xs text-[var(--muted-foreground)]">What needs attention now — click to see the alerts</p>
               </div>
             </header>
-            <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
               {ACTIONS.map((a) => {
                 const n = attention?.[a.key];
                 const done = n === 0;
@@ -709,55 +770,93 @@ export default function DashboardPage() {
             </ul>
           </section>
 
-          {/* Map + priority mix */}
+          {/* Risk heatmap + what sits in the top-right corner */}
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-            <section id="risk-map" className="panel scroll-mt-20 p-5 xl:col-span-2">
-              {loading || !mapData ? (
-                <div className="flex h-80 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
-              ) : (
-                <WorldMap countries={mapData.countries} unmappedCount={mapData.unmapped_count} onCountryClick={goCountry} />
-              )}
-            </section>
             <Panel
-              title="Priority mix"
-              subtitle={
-                mixView === "final"
-                  ? `Final priority, after escalation${summary?.escalated_count ? ` · ${summary.escalated_count} escalated` : ""}`
-                  : "Band from the score alone (before escalation)"
-              }
-              icon={TrendingUp}
+              className="xl:col-span-2"
+              title="Risk heatmap"
+              subtitle={heatmapSubtitle}
+              icon={Flame}
               action={
-                <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium dark:bg-slate-800">
-                  {(["final", "score"] as const).map((v) => (
-                    <button
-                      key={v}
-                      onClick={() => setMixView(v)}
-                      className={`whitespace-nowrap rounded-md px-2.5 py-1 transition-colors ${
-                        mixView === v ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-                      }`}
-                    >
-                      {v === "final" ? "Final" : "By score"}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-1">
+                  {heatmapToggle}
+                  <FullscreenButton label="heatmap" onClick={() => setHeatmapFull(true)} disabled={!heatmap} />
                 </div>
               }
             >
-              {loading ? (
+              {!heatmap ? (
+                <div className="flex h-[420px] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
+              ) : (
+                <>
+                  <RiskHeatmap
+                    data={heatmap}
+                    view={heatmapView}
+                    onSelectGroup={(id) => router.push(`/alerts?group_id=${id ?? "none"}`)}
+                    onSelectAlert={setOpenAlert}
+                  />
+                  {heatmap.not_placed > 0 && (
+                    <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+                      {heatmap.not_placed} alert{heatmap.not_placed === 1 ? " isn't" : "s aren't"} shown because {heatmap.not_placed === 1 ? "it has" : "they have"} no cost or urgency rating yet.
+                    </p>
+                  )}
+                </>
+              )}
+            </Panel>
+            <Panel title="Act first" subtitle="Most urgent and most demanding, from the heatmap" icon={AlertTriangle}>
+              {!heatmap ? (
                 <div className="flex h-60 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
               ) : (
-                <PriorityDonut
-                  byBand={mixView === "final" ? byBand : summary?.by_score_band ?? byBand}
-                  total={total}
-                  onSelect={mixView === "final" ? goPriority : () => {}}
-                />
+                <ol className="space-y-1">
+                  {heatmapFocus(heatmap, heatmapView).slice(0, 7).map((item, i) => (
+                    <li key={item.key}>
+                      <button
+                        type="button"
+                        onClick={() => ("group" in item && item.group ? router.push(`/alerts?group_id=${item.group.id ?? "none"}`) : "alert" in item && item.alert && setOpenAlert(item.alert.id))}
+                        className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                      >
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0b1f45] text-[11px] font-bold text-white dark:bg-slate-700">{i + 1}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-slate-800 dark:text-slate-100" title={item.name}>{item.name}</span>
+                          <span className="block text-xs text-[var(--muted-foreground)]">{item.meta}</span>
+                        </span>
+                        <span className="shrink-0 text-right text-[11px] leading-tight tabular-nums text-slate-500">
+                          <span className="block">Urgency <strong className="text-slate-900 dark:text-white">{item.urgency.toFixed(heatmapView === "groups" ? 1 : 0)}</strong></span>
+                          <span className="block">Resources <strong className="text-slate-900 dark:text-white">{item.resources.toFixed(heatmapView === "groups" ? 1 : 0)}</strong></span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                  {heatmapFocus(heatmap, heatmapView).length === 0 && (
+                    <li className="py-10 text-center text-sm text-[var(--muted-foreground)]">Nothing to show yet.</li>
+                  )}
+                </ol>
               )}
             </Panel>
           </div>
 
-          {/* Pareto + countries */}
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+          {/* Map — full width */}
+          <div>
+            <section id="risk-map" className="panel scroll-mt-20 p-5">
+              {loading || !mapData ? (
+                <div className="flex h-80 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
+              ) : (
+                <WorldMap
+                  countries={mapData.countries}
+                  subdivisions={mapData.subdivisions}
+                  jurisdictions={mapData.jurisdictions}
+                  unmappedCount={mapData.unmapped_count}
+                  onCountryClick={goCountry}
+                  onJurisdictionClick={goJurisdiction}
+                  headerAction={<FullscreenButton label="world map" onClick={() => setMapFull(true)} />}
+                />
+              )}
+            </section>
+          </div>
+
+          {/* Pareto + priority mix + countries */}
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
             <Panel
-              className="xl:col-span-2"
+              className="md:col-span-2"
               title="Risk concentration"
               subtitle={
                 paretoData
@@ -765,7 +864,12 @@ export default function DashboardPage() {
                   : undefined
               }
               icon={Layers}
-              action={<ConcentrationInfo data={paretoData} />}
+              action={
+                <div className="flex items-center gap-1">
+                  <ConcentrationInfo data={paretoData} />
+                  <FullscreenButton label="risk concentration" onClick={openParetoFull} disabled={!paretoData} />
+                </div>
+              }
             >
               {loading || !paretoData ? (
                 <div className="flex h-72 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
@@ -779,6 +883,36 @@ export default function DashboardPage() {
                     onBarClick={(id) => router.push(`/alerts/${id}`)}
                   />
                 </>
+              )}
+            </Panel>
+            <Panel
+              title="Priority mix"
+              subtitle={mixView === "final" ? `After escalation${summary?.escalated_count ? ` · ${summary.escalated_count} escalated` : ""}` : "Score alone, before escalation"}
+              icon={TrendingUp}
+            >
+              <div className="-mt-2 mb-3 flex justify-center">
+                <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium dark:bg-slate-800">
+                  {(["final", "score"] as const).map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setMixView(v)}
+                      className={`whitespace-nowrap rounded-md px-2.5 py-1 transition-colors ${
+                        mixView === v ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                      }`}
+                    >
+                      {v === "final" ? "Final" : "By score"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {loading ? (
+                <div className="flex h-60 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
+              ) : (
+                <PriorityDonut
+                  byBand={mixView === "final" ? byBand : summary?.by_score_band ?? byBand}
+                  total={total}
+                  onSelect={mixView === "final" ? goPriority : () => {}}
+                />
               )}
             </Panel>
             <Panel
@@ -846,6 +980,83 @@ export default function DashboardPage() {
             </section>
         </>
       )}
+
+      {/* Full-screen views */}
+      <ChartFullscreen
+        open={heatmapFull && !!heatmap}
+        onOpenChange={setHeatmapFull}
+        title="Risk heatmap"
+        subtitle={heatmapSubtitle}
+        actions={heatmapToggle}
+        footer={
+          heatmap && heatmap.not_placed > 0 ? (
+            <p className="text-xs text-[var(--muted-foreground)]">
+              {heatmap.not_placed} alert{heatmap.not_placed === 1 ? " isn't" : "s aren't"} shown because {heatmap.not_placed === 1 ? "it has" : "they have"} no cost or urgency rating yet.
+            </p>
+          ) : undefined
+        }
+      >
+        {heatmap && (
+          <RiskHeatmap
+            fill
+            data={heatmap}
+            view={heatmapView}
+            onSelectGroup={(id) => router.push(`/alerts?group_id=${id ?? "none"}`)}
+            onSelectAlert={(id) => {
+              setHeatmapFull(false);
+              setOpenAlert(id);
+            }}
+          />
+        )}
+      </ChartFullscreen>
+
+      <ChartFullscreen
+        open={paretoFull}
+        onOpenChange={setParetoFull}
+        title="Risk concentration"
+        subtitle={
+          paretoAll
+            ? `${paretoAll.displayed_count < paretoAll.total_scored_count ? `Top ${paretoAll.displayed_count} of ${paretoAll.total_scored_count}` : `All ${paretoAll.total_scored_count}`} scored alerts, highest first · line shows cumulative share of total risk`
+            : "Loading every scored alert…"
+        }
+        actions={<ConcentrationInfo data={paretoAll} />}
+      >
+        {paretoAll ? (
+          <ParetoChart
+            fill
+            data={paretoAll.data}
+            totalSum={paretoAll.total_sum}
+            totalScoredCount={paretoAll.total_scored_count}
+            displayedCount={paretoAll.displayed_count}
+            onBarClick={(id) => {
+              setParetoFull(false);
+              setOpenAlert(id);
+            }}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
+        )}
+      </ChartFullscreen>
+
+      <ChartFullscreen
+        open={mapFull && !!mapData}
+        onOpenChange={setMapFull}
+        title="Global risk heat map"
+        subtitle={mapData ? `${mapData.countries.length} ${mapData.countries.length === 1 ? "country" : "countries"} with alerts · click a country to filter` : undefined}
+        actions={
+          mapData && mapData.unmapped_count > 0 ? (
+            <button
+              onClick={() => goCountry("unmapped")}
+              className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
+              <span className="inline-block h-2 w-2 rounded-full bg-slate-400" />
+              {mapData.unmapped_count} unmapped
+            </button>
+          ) : undefined
+        }
+      >
+        {mapData && <WorldMap fill countries={mapData.countries} subdivisions={mapData.subdivisions} jurisdictions={mapData.jurisdictions} unmappedCount={mapData.unmapped_count} onCountryClick={goCountry} onJurisdictionClick={goJurisdiction} />}
+      </ChartFullscreen>
 
       {openAlert && (
         <AlertDrawer

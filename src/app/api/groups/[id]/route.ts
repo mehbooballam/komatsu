@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { query, getClient } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, canAssign, createAuditEvent } from "@/lib/auth-helpers";
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
-import { loadGroupTree, checkParent, subtreeIds } from "@/lib/groups";
+import { loadGroupTree, checkParent, subtreeIds, parseGroupFields, rememberLabels } from "@/lib/groups";
+import { addChangeNotes, alertsInGroupTree, commentRequired, readChangeComment } from "@/lib/change-notes";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
@@ -39,6 +40,8 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   const { id } = await params;
 
   const body = await request.json();
+  const comment = readChangeComment(request, body);
+  if (!comment) return commentRequired();
 
   if (body.action === "assign_owner") {
     if (!canAssign(auth.role)) return forbidden();
@@ -59,7 +62,26 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     );
 
     await createAuditEvent(auth.company_id, auth.membership_id, "assign_owner", "regulation_group", id,
-      { owner: before.rows[0].owner_membership_id }, { owner: membershipId });
+      { owner: before.rows[0].owner_membership_id }, { owner: membershipId }, comment);
+
+    // Alerts without their own owner follow the group owner
+    await query(
+      `UPDATE alert_active_projections p
+       SET effective_owner_id = COALESCE(a.direct_owner_membership_id, rg.owner_membership_id), updated_at = NOW()
+       FROM alerts a LEFT JOIN regulation_groups rg ON rg.id = a.primary_group_id
+       WHERE p.alert_id = a.id AND a.primary_group_id = $1`,
+      [id]
+    );
+    const [tree, nameRes] = await Promise.all([
+      loadGroupTree(auth.company_id),
+      membershipId
+        ? query(`SELECT up.display_name FROM memberships m JOIN user_profiles up ON up.id = m.user_id WHERE m.id = $1`, [membershipId])
+        : null,
+    ]);
+    const path = tree.find((g) => g.id === id)?.path.join(" › ") ?? "group";
+    await addChangeNotes(auth.company_id, await alertsInGroupTree(auth.company_id, id), auth.membership_id,
+      membershipId ? `Group owner of ${path} set to ${nameRes?.rows[0]?.display_name ?? "a team member"}` : `Group owner of ${path} removed`,
+      comment);
 
     return NextResponse.json({ success: true });
   }
@@ -80,18 +102,38 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   const title = typeof body.title === "string" ? body.title.trim() : undefined;
   if (title !== undefined && !title) return NextResponse.json({ error: "Title is required" }, { status: 400 });
   if (title && title.length > 120) return NextResponse.json({ error: "Title must be 120 characters or fewer" }, { status: 400 });
+  const fields = parseGroupFields(body, jurisdiction_ref ?? current.jurisdiction_ref);
+  if ("error" in fields) return NextResponse.json({ error: fields.error }, { status: 400 });
 
-  await query(
-    `UPDATE regulation_groups SET title = COALESCE($1, title), jurisdiction_ref = COALESCE($2, jurisdiction_ref),
-     issuer = COALESCE($3, issuer), description = COALESCE($4, description), state = COALESCE($5, state),
-     parent_group_id = $6
-     WHERE id = $7 AND company_id = $8`,
-    [title ?? null, jurisdiction_ref ?? null, issuer ?? null, description ?? null, state ?? null, newParent, id, auth.company_id]
-  );
+  try {
+    await query(
+      `UPDATE regulation_groups SET title = COALESCE($1, title), jurisdiction_ref = COALESCE($2, jurisdiction_ref),
+       issuer = COALESCE($3, issuer), description = COALESCE($4, description), state = COALESCE($5, state),
+       parent_group_id = $6,
+       level = CASE WHEN $9::boolean THEN $10 ELSE level END,
+       group_key = CASE WHEN $9::boolean THEN $11 ELSE group_key END,
+       rule_identifiers = CASE WHEN $12::boolean THEN $13::jsonb ELSE rule_identifiers END,
+       labels = CASE WHEN $14::boolean THEN $15::text[] ELSE labels END
+       WHERE id = $7 AND company_id = $8`,
+      [title ?? null, jurisdiction_ref ?? null, issuer ?? null, description ?? null, state ?? null, newParent, id, auth.company_id,
+        fields.hasLevel, fields.level, fields.group_key, fields.hasIdentifiers, JSON.stringify(fields.identifiers),
+        fields.hasLabels, fields.labels]
+    );
+  } catch (e) {
+    if ((e as { code?: string }).code === "23505") return NextResponse.json({ error: "Another group already uses that key" }, { status: 409 });
+    throw e;
+  }
 
+  if (fields.hasLabels) await rememberLabels(auth.company_id, fields.labels);
   await createAuditEvent(auth.company_id, auth.membership_id, "update", "regulation_group", id,
-    { title: current.title, parent_group_id: current.parent_group_id },
-    { title: title ?? current.title, parent_group_id: newParent });
+    { title: current.title, parent_group_id: current.parent_group_id, labels: current.labels },
+    { title: title ?? current.title, parent_group_id: newParent, labels: fields.hasLabels ? fields.labels : current.labels }, comment);
+  if (moving && newParent !== current.parent_group_id) {
+    const tree = await loadGroupTree(auth.company_id);
+    const path = tree.find((g) => g.id === id)?.path.join(" › ") ?? current.title;
+    await addChangeNotes(auth.company_id, await alertsInGroupTree(auth.company_id, id), auth.membership_id,
+      `Group moved: now ${path}`, comment);
+  }
 
   const group = (await loadGroupTree(auth.company_id)).find((g) => g.id === id);
   return NextResponse.json({ group });
@@ -101,12 +143,14 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
  * Deletes a group and all of its sub-groups (they are archived, so history is kept).
  * Their alerts move up to the deleted group's parent, or become ungrouped at top level.
  */
-export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
   if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   if (!canEdit(auth.role)) return forbidden();
   const { id } = await params;
+  const comment = readChangeComment(request);
+  if (!comment) return commentRequired();
 
   const tree = await loadGroupTree(auth.company_id);
   const group = tree.find((g) => g.id === id);
@@ -116,6 +160,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
 
   const client = await getClient();
   let moved = 0;
+  let movedIds: string[] = [];
   try {
     await client.query("BEGIN");
     const res = await client.query(
@@ -124,6 +169,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
       [target, auth.company_id, ids]
     );
     moved = res.rowCount ?? 0;
+    movedIds = res.rows.map((r) => r.id);
     await client.query(`DELETE FROM alert_group_links WHERE company_id = $1 AND group_id = ANY($2::uuid[])`, [auth.company_id, ids]);
     await client.query(
       `UPDATE regulation_groups SET state = 'archived' WHERE company_id = $1 AND id = ANY($2::uuid[])`,
@@ -147,7 +193,10 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
 
   await createAuditEvent(auth.company_id, auth.membership_id, "delete", "regulation_group", id,
     { title: group.title, path: group.path, subgroups: ids.length - 1 },
-    { alerts_moved_to: target, alerts_moved: moved });
+    { alerts_moved_to: target, alerts_moved: moved }, comment);
+  const targetPath = target ? tree.find((g) => g.id === target)?.path.join(" › ") : null;
+  await addChangeNotes(auth.company_id, movedIds, auth.membership_id,
+    `Group ${group.path.join(" › ")} deleted — alert moved to ${targetPath ?? "no group"}`, comment);
 
   return NextResponse.json({ success: true, deleted_groups: ids.length, alerts_moved: moved, moved_to: target });
 }

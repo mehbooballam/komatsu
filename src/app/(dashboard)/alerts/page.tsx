@@ -3,13 +3,13 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Search, X, ChevronDown, Check, Upload, Plus, Tag, ChevronLeft, ChevronRight, Loader2, Trash2 } from "lucide-react";
+import { Search, X, ChevronDown, Check, Upload, Plus, Tag, ChevronLeft, ChevronRight, Loader2, Trash2, Eye } from "lucide-react";
 import { ConfirmDialog, deleteAlertsRequest } from "@/components/alerts/confirm-dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AlertDrawer } from "@/components/alerts/alert-drawer";
-import { AlertsTable, type AlertRow, groupColor, createGroup, MAX_GROUP_DEPTH } from "@/components/alerts/alerts-table";
+import { AlertsTable, type AlertRow, createGroup, MAX_GROUP_DEPTH } from "@/components/alerts/alerts-table";
 import { useSessionInfo } from "@/components/layout/session-context";
-import { hasCompanyWideAccess } from "@/lib/auth/permissions";
+import { canMakeChanges, hasCompanyWideAccess } from "@/lib/auth/permissions";
 
 interface Option { value: string; label: string; count?: number }
 interface GroupOption extends Option { parent: string | null; depth: number; path: string[] }
@@ -22,6 +22,8 @@ interface Facets {
   ungrouped_count: number;
   owners: Option[];
   unassigned_count: number;
+  human_review_count?: number;
+  products?: Option[];
   priorities: Record<string, number>;
 }
 
@@ -34,9 +36,15 @@ interface Filters {
   group: string | null;
   deadline: string | null;
   needsReview: boolean;
+  /** Flagged for human review (import column or by a person) */
+  humanReview: boolean;
+  /** "family:<id>" / "model:<id>" */
+  products: string[];
+  /** One jurisdiction as written in the feed (from the dashboard map) */
+  jurisdiction: string | null;
 }
 
-const EMPTY: Filters = { search: "", priorities: [], stages: [], countries: [], owner: null, group: null, deadline: null, needsReview: false };
+const EMPTY: Filters = { search: "", priorities: [], stages: [], countries: [], owner: null, group: null, deadline: null, needsReview: false, humanReview: false, products: [], jurisdiction: null };
 
 const PRIORITY_PILLS = [
   { value: "critical", label: "Critical", dot: "bg-violet-500" },
@@ -55,6 +63,147 @@ const DEADLINE_OPTIONS: Option[] = [
 ];
 
 const PAGE_SIZE = 25;
+
+/** Group filter: searchable dropdown, groups as a tree (sub-groups indented), plus "No group". */
+function GroupSelect({
+  groups,
+  ungroupedCount,
+  value,
+  onChange,
+  canCreate,
+  onCreate,
+}: {
+  groups: GroupOption[];
+  ungroupedCount: number | undefined;
+  value: string | null;
+  onChange: (v: string | null) => void;
+  canCreate: boolean;
+  onCreate: (title: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Tree order: each group followed by its sub-groups
+  const ordered = useMemo(() => {
+    const kids = new Map<string | null, GroupOption[]>();
+    for (const g of groups) {
+      const k = g.parent ?? null;
+      if (!kids.has(k)) kids.set(k, []);
+      kids.get(k)!.push(g);
+    }
+    for (const list of kids.values()) list.sort((a, b) => a.label.localeCompare(b.label));
+    const out: GroupOption[] = [];
+    const walk = (p: string | null) => {
+      for (const g of kids.get(p) ?? []) {
+        out.push(g);
+        walk(g.value);
+      }
+    };
+    walk(null);
+    // Orphans (parent not in the list) at the end
+    for (const g of groups) if (!out.includes(g)) out.push(g);
+    return out;
+  }, [groups]);
+  const term = q.trim().toLowerCase();
+  const shown = term ? ordered.filter((g) => g.path.join(" › ").toLowerCase().includes(term)) : ordered;
+  const current = value && value !== "none" ? groups.find((g) => g.value === value) : null;
+  const summary = value === "none" ? "No group" : current ? current.path.join(" › ") : null;
+  const pick = (v: string | null) => {
+    onChange(v);
+    setOpen(false);
+    setQ("");
+  };
+  const row = (key: string, label: React.ReactNode, on: boolean, onClick: () => void, count?: number, depth = 0, title?: string) => (
+    <button
+      key={key}
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`flex w-full items-center gap-2 rounded-lg py-1.5 pr-2.5 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800 ${on ? "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300" : ""}`}
+      style={{ paddingLeft: 10 + depth * 14 }}
+    >
+      {depth > 0 && <span className="h-px w-2 shrink-0 bg-slate-300 dark:bg-slate-600" aria-hidden />}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count !== undefined && <span className="shrink-0 text-xs tabular-nums text-slate-400">{count}</span>}
+      {on && <Check className="h-3.5 w-3.5 shrink-0" />}
+    </button>
+  );
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQ(""); }}>
+      <PopoverTrigger asChild>
+        <button
+          className={`inline-flex h-9 max-w-[22rem] items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors ${
+            summary
+              ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300"
+              : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          }`}
+          title={summary ?? undefined}
+        >
+          <Tag className="h-3.5 w-3.5 shrink-0 opacity-60" />
+          <span className="shrink-0 text-slate-500 dark:text-slate-400">Group{summary ? ":" : ""}</span>
+          {summary && <span className="min-w-0 truncate">{summary}</span>}
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[22rem] max-w-[calc(100vw-2rem)] p-1.5">
+        <div className="relative mb-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={`Search ${groups.length} groups…`}
+            aria-label="Search groups"
+            className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-2.5 text-sm focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900"
+          />
+        </div>
+        <div className="max-h-80 overflow-y-auto">
+          {!term && row("all", "All groups", value === null, () => pick(null))}
+          {!term && (ungroupedCount ?? 0) > 0 && row("none", <span className="italic">No group</span>, value === "none", () => pick("none"), ungroupedCount)}
+          {!term && groups.length > 0 && <div role="separator" className="my-1 border-t border-slate-100 dark:border-slate-800" />}
+          {shown.map((g) =>
+            row(
+              g.value,
+              term ? g.path.join(" › ") : g.label,
+              value === g.value,
+              () => pick(g.value),
+              g.count,
+              term ? 0 : Math.max(0, g.depth - 1),
+              g.path.join(" › ")
+            )
+          )}
+          {shown.length === 0 && <p className="px-2.5 py-3 text-sm text-slate-500">No group matches “{q}”.</p>}
+        </div>
+        {canCreate && (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!name.trim()) return;
+              setBusy(true);
+              await onCreate(name.trim());
+              setBusy(false);
+              setName("");
+              setOpen(false);
+            }}
+            className="mt-1 flex gap-1.5 border-t border-slate-100 px-1 pt-2 dark:border-slate-800"
+          >
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={current ? `New sub-group of ${current.label}` : "New group"}
+              aria-label="New group name"
+              className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-sm focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900"
+            />
+            <button type="submit" disabled={busy || !name.trim()} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+              <Plus className="h-3 w-3" /> Create
+            </button>
+          </form>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function FacetSelect({
   label,
@@ -155,7 +304,8 @@ export default function AlertsPage() {
   const searchParams = useSearchParams();
   const session = useSessionInfo();
   const role = session?.membership.role;
-  const canEdit = !!role && role !== "risk_owner";
+  // Reviewers and risk owners can only look
+  const canEdit = canMakeChanges(role);
   const workspaceWide = hasCompanyWideAccess(role ?? "", session?.membership.access_scope ?? "");
   const isAdmin = role === "company_admin";
   const canDelete = role === "company_admin" || role === "manager";
@@ -172,6 +322,9 @@ export default function AlertsPage() {
     countries: searchParams.get("geography")?.split(",").filter(Boolean) ?? [],
     deadline: searchParams.get("deadline_within"),
     needsReview: searchParams.get("needs_review") === "true",
+    humanReview: searchParams.get("human_review") === "true",
+    products: searchParams.get("product")?.split(",").filter(Boolean) ?? [],
+    jurisdiction: searchParams.get("jurisdiction"),
     group: searchParams.get("group_id"),
     owner: searchParams.get("owner_id"),
   }));
@@ -180,8 +333,6 @@ export default function AlertsPage() {
   const [selectedAlert, setSelectedAlert] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState("priority");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [creatingGroup, setCreatingGroup] = useState(false);
-  const [newGroupName, setNewGroupName] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
 
   const update = (patch: Partial<Filters>) => {
@@ -219,6 +370,9 @@ export default function AlertsPage() {
     if (filters.group) params.set("group_id", filters.group);
     if (filters.deadline) params.set("deadline_within", filters.deadline);
     if (filters.needsReview) params.set("needs_review", "true");
+    if (filters.humanReview) params.set("human_review", "true");
+    if (filters.products.length) params.set("product", filters.products.join(","));
+    if (filters.jurisdiction) params.set("jurisdiction", filters.jurisdiction);
     return params.toString();
   }, [page, sortBy, sortDir, filters]);
 
@@ -259,19 +413,14 @@ export default function AlertsPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const activeCount =
     filters.priorities.length + filters.stages.length + filters.countries.length +
-    (filters.owner ? 1 : 0) + (filters.group ? 1 : 0) + (filters.deadline ? 1 : 0) + (filters.search ? 1 : 0) + (filters.needsReview ? 1 : 0);
+    (filters.owner ? 1 : 0) + (filters.group ? 1 : 0) + (filters.deadline ? 1 : 0) + (filters.search ? 1 : 0) + (filters.needsReview ? 1 : 0) + (filters.humanReview ? 1 : 0) + filters.products.length + (filters.jurisdiction ? 1 : 0);
 
   const allCount = useMemo(() => (facets ? Object.values(facets.priorities).reduce((a, b) => a + b, 0) : null), [facets]);
 
-  async function handleCreateGroup(e: React.FormEvent) {
-    e.preventDefault();
-    const title = newGroupName.trim();
-    if (!title) return;
+  async function createGroupNamed(title: string) {
     try {
-      // Created inside the group being viewed, as long as that stays within the depth limit
+      // Created inside the selected group, as long as that stays within the depth limit
       const g = await createGroup(title, currentGroup && currentGroup.depth < MAX_GROUP_DEPTH ? currentGroup.value : null);
-      setNewGroupName("");
-      setCreatingGroup(false);
       loadFacets();
       update({ group: g.id });
     } catch {
@@ -279,36 +428,8 @@ export default function AlertsPage() {
     }
   }
 
-  // Group drill-down: breadcrumb of the selected group's ancestors, then its sub-groups
   const groupList = facets?.groups || [];
   const currentGroup = filters.group && filters.group !== "none" ? groupList.find((g) => g.value === filters.group) || null : null;
-  const trail: GroupOption[] = [];
-  for (let g = currentGroup; g; g = g.parent ? groupList.find((x) => x.value === g!.parent) || null : null) trail.unshift(g);
-  const childGroups = groupList.filter((g) => g.parent === (currentGroup?.value ?? null));
-  const hasChildren = (id: string) => groupList.some((g) => g.parent === id);
-  const canNest = !currentGroup || currentGroup.depth < MAX_GROUP_DEPTH;
-
-  const groupChip = (value: string | null, label: string, count: number | undefined, colorKey?: string, nested = false) => {
-    const on = filters.group === value;
-    return (
-      <button
-        key={value ?? "all"}
-        onClick={() => update({ group: value })}
-        className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition-all ${
-          on
-            ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900 dark:ring-white"
-            : colorKey
-            ? `${groupColor(colorKey)} hover:brightness-95`
-            : "bg-white text-slate-600 ring-slate-200 hover:ring-slate-300 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-        }`}
-      >
-        {colorKey && <Tag className="h-3 w-3" />}
-        {label}
-        {count !== undefined && <span className={`tabular-nums ${on ? "opacity-80" : "opacity-60"}`}>{count}</span>}
-        {nested && <ChevronRight className="-mr-1 h-3 w-3 opacity-60" aria-label="has sub-groups" />}
-      </button>
-    );
-  };
 
   return (
     <div className="space-y-5">
@@ -405,46 +526,18 @@ export default function AlertsPage() {
           </div>
         </div>
 
-        {/* Group labels */}
-        {workspaceWide && <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-100 px-4 py-3 dark:border-slate-800">
-          <span className="mr-1 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Groups</span>
-          {groupChip(null, "All", undefined)}
-          {trail.map((g) => (
-            <React.Fragment key={g.value}>
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-300 dark:text-slate-600" />
-              {groupChip(g.value, g.label, g.count, g.path[0])}
-            </React.Fragment>
-          ))}
-          {currentGroup && childGroups.length > 0 && (
-            <span className="ml-1 mr-0.5 h-5 w-px shrink-0 bg-slate-200 dark:bg-slate-700" aria-hidden />
-          )}
-          {childGroups.map((g) => groupChip(g.value, g.label, g.count, g.path[0], hasChildren(g.value)))}
-          {!currentGroup && facets && facets.ungrouped_count > 0 && groupChip("none", "No group", facets.ungrouped_count)}
-          {canEdit &&
-            (creatingGroup ? (
-              <form onSubmit={handleCreateGroup} className="flex shrink-0 items-center gap-1">
-                <input
-                  autoFocus
-                  value={newGroupName}
-                  onChange={(e) => setNewGroupName(e.target.value)}
-                  onBlur={() => !newGroupName && setCreatingGroup(false)}
-                  placeholder={currentGroup && canNest ? `Sub-group of ${currentGroup.label}` : "Group name"}
-                  className="h-8 w-56 rounded-full border border-slate-300 bg-white px-3 text-xs focus:border-blue-500 focus:outline-none dark:border-slate-600 dark:bg-slate-900"
-                />
-                <button type="submit" className="h-8 rounded-full bg-blue-600 px-3 text-xs font-semibold text-white">Create</button>
-              </form>
-            ) : (
-              <button
-                onClick={() => setCreatingGroup(true)}
-                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-500 hover:border-blue-400 hover:text-blue-600 dark:border-slate-600"
-              >
-                <Plus className="h-3 w-3" /> {currentGroup && canNest ? "New sub-group" : "New group"}
-              </button>
-            ))}
-        </div>}
-
         {/* More filters */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+          {workspaceWide && (
+            <GroupSelect
+              groups={groupList}
+              ungroupedCount={facets?.ungrouped_count}
+              value={filters.group}
+              onChange={(v) => update({ group: v })}
+              canCreate={canEdit}
+              onCreate={createGroupNamed}
+            />
+          )}
           {workspaceWide && <><FacetSelect label="Stage" options={facets?.stages || []} selected={filters.stages} onChange={(v) => update({ stages: v })} />
           <FacetSelect
             label="Country"
@@ -461,6 +554,15 @@ export default function AlertsPage() {
             selected={filters.owner ? [filters.owner] : []}
             onChange={(v) => update({ owner: v[0] ?? null })}
           /></>}
+          {workspaceWide && (
+            <FacetSelect
+              label="Product"
+              options={facets?.products || []}
+              selected={filters.products}
+              onChange={(v) => update({ products: v })}
+              searchable
+            />
+          )}
           <FacetSelect
             label="Deadline"
             multi={false}
@@ -468,9 +570,34 @@ export default function AlertsPage() {
             selected={filters.deadline ? [filters.deadline] : []}
             onChange={(v) => update({ deadline: v[0] ?? null })}
           />
+          <button
+            type="button"
+            aria-pressed={filters.humanReview}
+            onClick={() => update({ humanReview: !filters.humanReview })}
+            title="Alerts flagged for human review — by the import file's needs_human_review column or by a person"
+            className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors ${
+              filters.humanReview
+                ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300"
+                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            }`}
+          >
+            <Eye className="h-3.5 w-3.5 opacity-70" />
+            Needs review
+            {facets?.human_review_count != null && (
+              <span className={`rounded-full px-1.5 text-xs tabular-nums ${facets.human_review_count > 0 ? "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200" : "bg-slate-100 text-slate-500 dark:bg-slate-800"}`}>
+                {facets.human_review_count}
+              </span>
+            )}
+          </button>
+          {filters.jurisdiction && (
+            <span className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-50 px-3 text-sm font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">
+              {filters.jurisdiction}
+              <button onClick={() => update({ jurisdiction: null })} aria-label="Remove jurisdiction filter"><X className="h-3.5 w-3.5" /></button>
+            </span>
+          )}
           {filters.needsReview && (
-            <span className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-amber-50 px-3 text-sm font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
-              Needs review
+            <span className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-slate-100 px-3 text-sm font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+              Incomplete scores
               <button onClick={() => update({ needsReview: false })} aria-label="Remove"><X className="h-3.5 w-3.5" /></button>
             </span>
           )}

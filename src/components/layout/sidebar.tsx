@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, AlertTriangle, FolderOpen, Package, Upload,
   Users, History, Settings, Menu, ChevronDown, ChevronRight, LogOut, User,
-  Shield, Moon, Sun, ChevronsUpDown, Check, Plus, KeyRound,
+  Shield, FileText, Moon, Sun, ChevronsUpDown, Check, Plus, KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { workspaceHome } from "@/lib/auth/permissions";
@@ -31,6 +31,9 @@ interface SidebarProps {
   companies?: Array<{ id: string; name: string; slug: string; role?: string; icon?: string | null }>;
 }
 
+/** Monthly Reports menu entry — switch to true to show it in the sidebar. */
+const SHOW_REPORTS_MENU = false;
+
 type NavItem = { label: string; href: string; icon: React.ElementType; roles: string[] };
 
 const navSections: Array<{ title: string; items: NavItem[] }> = [
@@ -40,13 +43,15 @@ const navSections: Array<{ title: string; items: NavItem[] }> = [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, roles: ["company_admin", "manager", "reviewer"] },
       { label: "Alerts", href: "/alerts", icon: AlertTriangle, roles: ["company_admin", "manager", "reviewer"] },
       { label: "Regulation Groups", href: "/groups", icon: FolderOpen, roles: ["company_admin", "manager", "reviewer"] },
+      // Hidden until the client demo is done; the pages stay reachable at /reports.
+      ...(SHOW_REPORTS_MENU ? [{ label: "Monthly Reports", href: "/reports", icon: FileText, roles: ["company_admin", "manager", "reviewer"] }] : []),
     ],
   },
   {
     title: "Data",
     items: [
       { label: "Imports", href: "/imports", icon: Upload, roles: ["company_admin", "manager"] },
-      { label: "Product Inventory", href: "/products", icon: Package, roles: ["company_admin", "manager"] },
+      { label: "Products", href: "/products", icon: Package, roles: ["company_admin", "manager"] },
     ],
   },
   {
@@ -286,7 +291,7 @@ export function Sidebar({ user, company, role, workspaceWide, companies = [] }: 
   const sections = (role === "risk_owner" ? riskOwnerSections : navSections)
     .map((s) => ({
       ...s,
-      items: s.items.filter((i) => i.roles.includes(role) && (workspaceWide || !["/dashboard", "/groups"].includes(i.href))),
+      items: s.items.filter((i) => i.roles.includes(role) && (workspaceWide || !["/dashboard", "/groups", "/reports"].includes(i.href))),
     }))
     .filter((s) => s.items.length > 0);
 
@@ -405,7 +410,7 @@ export function Sidebar({ user, company, role, workspaceWide, companies = [] }: 
     <>
       <form ref={logoutForm} action="/api/auth/logout" method="POST" hidden />
       {/* Tablet and mobile top bar */}
-      <div className="fixed inset-x-0 top-0 z-40 grid h-14 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--sidebar-border)] bg-[var(--sidebar-bg)] px-3 shadow-sm lg:hidden">
+      <div className="print:hidden fixed inset-x-0 top-0 z-40 grid h-14 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--sidebar-border)] bg-[var(--sidebar-bg)] px-3 shadow-sm lg:hidden">
         <button
           type="button"
           onClick={() => updateMobileMenu(!mobileOpen)}

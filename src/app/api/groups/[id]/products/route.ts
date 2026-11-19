@@ -3,6 +3,15 @@ import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { groupProducts, resolveTarget } from "@/lib/products";
+import { addChangeNotes, alertsInGroupTree, commentRequired, readChangeComment } from "@/lib/change-notes";
+
+async function names(companyId: string, groupId: string, col: string, targetId: string) {
+  const [g, p] = await Promise.all([
+    query(`SELECT title FROM regulation_groups WHERE id = $1 AND company_id = $2`, [groupId, companyId]),
+    query(col === "family_id" ? `SELECT name FROM product_families WHERE id = $1` : `SELECT name FROM products WHERE id = $1`, [targetId]),
+  ]);
+  return { group: g.rows[0]?.title ?? "group", product: p.rows[0]?.name ?? "product" };
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -32,7 +41,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   if (!(await findGroup(auth.company_id, id))) return NextResponse.json({ error: "Group not found" }, { status: 404 });
 
-  const target = await resolveTarget(auth.company_id, await request.json().catch(() => ({})));
+  const body = await request.json().catch(() => ({}));
+  const comment = readChangeComment(request, body);
+  if (!comment) return commentRequired();
+  const target = await resolveTarget(auth.company_id, body);
   if ("error" in target) return NextResponse.json(target, { status: 400 });
   const col = target.kind === "family" ? "family_id" : "product_id";
 
@@ -42,7 +54,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
      ON CONFLICT (group_id, COALESCE(family_id, product_id)) DO NOTHING`,
     [auth.company_id, id, target.id, auth.membership_id]
   );
-  await createAuditEvent(auth.company_id, auth.membership_id, "attach_product", "regulation_group", id, null, { [col]: target.id });
+  await createAuditEvent(auth.company_id, auth.membership_id, "attach_product", "regulation_group", id, null, { [col]: target.id }, comment);
+  const n = await names(auth.company_id, id, col, target.id);
+  await addChangeNotes(auth.company_id, await alertsInGroupTree(auth.company_id, id), auth.membership_id,
+    `Product ${n.product} attached to group ${n.group}`, comment);
   return NextResponse.json({ success: true });
 }
 
@@ -62,8 +77,13 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   const col = familyId ? "family_id" : "product_id";
   const targetId = (familyId || productId)!;
   if (!UUID_RE.test(targetId)) return NextResponse.json({ error: "Product not found" }, { status: 400 });
+  const comment = readChangeComment(request);
+  if (!comment) return commentRequired();
 
   await query(`DELETE FROM group_product_links WHERE company_id = $1 AND group_id = $2 AND ${col} = $3`, [auth.company_id, id, targetId]);
-  await createAuditEvent(auth.company_id, auth.membership_id, "detach_product", "regulation_group", id, { [col]: targetId }, null);
+  await createAuditEvent(auth.company_id, auth.membership_id, "detach_product", "regulation_group", id, { [col]: targetId }, null, comment);
+  const n = await names(auth.company_id, id, col, targetId);
+  await addChangeNotes(auth.company_id, await alertsInGroupTree(auth.company_id, id), auth.membership_id,
+    `Product ${n.product} removed from group ${n.group}`, comment);
   return NextResponse.json({ success: true });
 }

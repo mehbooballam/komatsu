@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Check, ChevronRight, Loader2, Package, Boxes, Layers } from "lucide-react";
+import { askChangeComment, commentHeader } from "@/components/layout/change-comment";
 
 export interface InventoryProduct { id: string; name: string; model_code: string | null; is_active: boolean }
 export interface InventoryFamily { id: string; name: string; state: string; products: InventoryProduct[] | null }
@@ -24,25 +25,40 @@ export interface AttachedProduct {
 
 export const productKey = (kind: "family" | "product", id: string) => `${kind}:${id}`;
 
-/** Attach (or detach) products to alerts. */
-export async function setAlertProduct(alertIds: string[], ref: ProductRef, attach: boolean) {
+/**
+ * Attach (or detach) products to alerts. Asks for a comment first (shown in the alerts' Notes);
+ * returns false if the person cancels.
+ */
+export async function setAlertProduct(alertIds: string[], ref: ProductRef, attach: boolean): Promise<boolean> {
+  const comment = await askChangeComment({
+    action: `${attach ? "Attach" : "Remove"} product ${ref.name}${ref.kind === "family" ? " (whole family)" : ""}`,
+    detail: alertIds.length > 1 ? `${alertIds.length} alerts` : undefined,
+  });
+  if (!comment) return false;
   const res = await fetch("/api/alerts/products", {
     method: attach ? "POST" : "DELETE",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ alert_ids: alertIds, [ref.kind === "family" ? "family_id" : "product_id"]: ref.id }),
+    body: JSON.stringify({ alert_ids: alertIds, [ref.kind === "family" ? "family_id" : "product_id"]: ref.id, comment }),
   });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not update products");
+  return true;
 }
 
 /** Attach (or detach) a product to a regulation group. */
-export async function setGroupProduct(groupId: string, ref: ProductRef, attach: boolean) {
+export async function setGroupProduct(groupId: string, ref: ProductRef, attach: boolean, groupName?: string): Promise<boolean> {
+  const comment = await askChangeComment({
+    action: `${attach ? "Attach" : "Remove"} product ${ref.name}${groupName ? ` ${attach ? "to" : "from"} group ${groupName}` : ""}`,
+    detail: "Applies to every alert in the group and its sub-groups",
+  });
+  if (!comment) return false;
   const param = `${ref.kind === "family" ? "family_id" : "product_id"}=${ref.id}`;
   const res = await fetch(attach ? `/api/groups/${groupId}/products` : `/api/groups/${groupId}/products?${param}`, {
     method: attach ? "POST" : "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: attach ? JSON.stringify({ [ref.kind === "family" ? "family_id" : "product_id"]: ref.id }) : undefined,
+    headers: { "Content-Type": "application/json", ...commentHeader(comment) },
+    body: attach ? JSON.stringify({ [ref.kind === "family" ? "family_id" : "product_id"]: ref.id, comment }) : undefined,
   });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not update products");
+  return true;
 }
 
 /**
@@ -162,13 +178,13 @@ export function ProductPicker({
       <div className="max-h-72 overflow-y-auto">
         {families === null && (
           <div className="flex items-center gap-2 px-2 py-3 text-sm text-slate-500">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading inventory…
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading products…
           </div>
         )}
         {families && families.length === 0 && (
           <div className="px-2 py-4 text-center text-sm text-slate-500">
             <Boxes className="mx-auto mb-1.5 h-6 w-6 text-slate-300" />
-            The product inventory is empty.
+            No products yet.
           </div>
         )}
         {families && families.length > 0 && shown.length === 0 && <p className="px-2 py-3 text-sm text-slate-500">No matches.</p>}
@@ -206,7 +222,7 @@ export function ProductPicker({
         href="/products"
         className="mt-1 flex items-center gap-2 border-t border-slate-100 px-2 pb-1 pt-2 text-xs font-medium text-blue-600 hover:text-blue-700 dark:border-slate-800 dark:text-blue-400"
       >
-        <Package className="h-3.5 w-3.5" /> Manage product inventory
+        <Package className="h-3.5 w-3.5" /> Manage products
       </Link>
     </div>
   );
@@ -236,7 +252,7 @@ export function AlertProductsPicker({ alertId, onChanged }: { alertId: string; o
       attached={new Set(items.filter((p) => p.source === "alert" && p.state !== "suggested").map((p) => p.key))}
       inherited={new Map(items.filter((p) => p.source === "group").map((p) => [p.key, (p.group_path || []).join(" › ")]))}
       onToggle={async (ref, attach) => {
-        await setAlertProduct([alertId], ref, attach);
+        if (!(await setAlertProduct([alertId], ref, attach))) return;
         const r = await fetch(`/api/alerts/products?alert_id=${alertId}`);
         if (r.ok) setItems((await r.json()).products || []);
         onChanged?.(attach ? `Attached “${ref.name}”` : `Removed “${ref.name}”`);
@@ -254,7 +270,7 @@ export function BulkProductsPicker({ alertIds, onChanged }: { alertIds: string[]
       attachOnly
       attached={done}
       onToggle={async (ref) => {
-        await setAlertProduct(alertIds, ref, true);
+        if (!(await setAlertProduct(alertIds, ref, true))) return;
         setDone((s) => new Set(s).add(productKey(ref.kind, ref.id)));
         onChanged?.(`Attached “${ref.name}” to ${alertIds.length} alert${alertIds.length > 1 ? "s" : ""}`);
       }}

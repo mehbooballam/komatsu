@@ -12,9 +12,11 @@
     "db:reset": "npm run db:migrate && npm run db:seed",
     "setup": "npm install && npm run db:reset",
     "db:recalc": "tsx scripts/recalculate.ts",
-    "db:link-products": "tsx scripts/link-products.ts"
+    "db:link-products": "tsx scripts/link-products.ts",
+    "db:sample-groups": "tsx scripts/sample-groups.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
     "@auth/core": "^0.41.3",
     "@hookform/resolvers": "^7.0.7",
     "@radix-ui/react-avatar": "^1.3.1",

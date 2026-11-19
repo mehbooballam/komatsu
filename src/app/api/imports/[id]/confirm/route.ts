@@ -3,8 +3,7 @@ import { query } from "@/lib/db";
 import { canImport, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
 import { processImportBatch } from "@/lib/import/processor";
 import { validateRows, type ValidatedRow } from "@/lib/import/validator";
-import type { ParsedRow } from "@/lib/import/parser-xlsx";
-import type { ImportColumnName } from "@/lib/import/constants";
+import { mappingProblems, rowsFromRaw, type ColumnMapping } from "@/lib/import/mapping";
 
 export async function POST(
   _request: NextRequest,
@@ -21,7 +20,7 @@ export async function POST(
   const claimed = await query(
     `UPDATE import_batches SET status = 'processing', started_at = now()
      WHERE id = $1 AND company_id = $2 AND status = 'previewing'
-     RETURNING feed_id, update_mode, column_mapping`,
+     RETURNING feed_id, update_mode, column_mapping, mapping_profile_id`,
     [id, auth.company_id]
   );
   const batch = claimed.rows[0];
@@ -45,25 +44,17 @@ export async function POST(
       [id]
     );
 
-    // Restore the saved column mapping and use the same validation as the preview.
-    const columnMapping: Record<string, ImportColumnName | null> = batch.column_mapping || {};
-    const parsedRows: ParsedRow[] = rowsResult.rows.map((r) => {
-      const raw: Record<string, string | null> = r.raw_payload || {};
-      const mapped: Partial<Record<ImportColumnName, string | null>> = {};
-      const presentColumns = new Set<ImportColumnName>();
-
-      for (const [header, value] of Object.entries(raw)) {
-        if (!Object.hasOwn(columnMapping, header)) continue;
-        const col = columnMapping[header];
-        if (!col) continue;
-        presentColumns.add(col);
-        mapped[col] = typeof value === "string" ? value.trim() || null : value ?? null;
-      }
-
-      return { rowNumber: r.row_number, raw, mapped, presentColumns };
-    });
-
-    const validatedRows: ValidatedRow[] = validateRows(parsedRows).rows;
+    // Restore the batch's column mapping (as reviewed in the preview) and use the same validation.
+    const columnMapping: ColumnMapping = batch.column_mapping || {};
+    const problems = mappingProblems(columnMapping);
+    if (problems.length) {
+      await query(`UPDATE import_batches SET status = 'previewing', started_at = NULL WHERE id = $1`, [id]);
+      return NextResponse.json({ error: "Fix the column mapping first", problems }, { status: 400 });
+    }
+    const validatedRows: ValidatedRow[] = validateRows(rowsFromRaw(rowsResult.rows, columnMapping)).rows;
+    if (batch.mapping_profile_id) {
+      await query(`UPDATE import_mapping_profiles SET last_used_at = now() WHERE id = $1`, [batch.mapping_profile_id]);
+    }
     const result = await processImportBatch(
       id,
       auth.company_id,

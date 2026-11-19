@@ -4,12 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import {
   X, ExternalLink, Clock, ChevronDown, MapPin, Tag, FileText, AlertTriangle, Loader2,
   SlidersHorizontal, Link2, Package, FolderPlus, Check, UserPlus, UserMinus,
-  CalendarCheck, Globe2, History, CheckCircle2, FolderMinus,
+  CalendarCheck, Globe2, History, CheckCircle2, FolderMinus, Layers, Fingerprint, Eye,
 } from "lucide-react";
+import { IDENTIFIER_LABELS, METHOD_LABELS, VERSION_LABELS, type GroupingMethod, type IdentifierKind, type VersionType } from "@/lib/grouping/labels";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScoreEditor } from "@/components/alerts/score-editor";
 import { useSessionInfo } from "@/components/layout/session-context";
-import { StageBadge, GroupPicker, createGroup, type Group } from "@/components/alerts/alerts-table";
+import { askChangeComment, commentHeader } from "@/components/layout/change-comment";
+import { StageBadge, GroupPicker, createGroup, NeedsReviewBadge, setHumanReview, type Group } from "@/components/alerts/alerts-table";
 import { DeadlineDialog } from "@/components/alerts/deadline-dialog";
 import { AlertNotes } from "@/components/alerts/alert-notes";
 import { AlertCountryMapping } from "@/components/alerts/alert-country-mapping";
@@ -17,7 +19,92 @@ import { describeEvent, type Refs } from "@/lib/audit-describe";
 import { Sentence, ChangeList, lowerFirst } from "@/components/audit/audit-entry";
 import { ProductPicker, ProductChip, setAlertProduct, type AttachedProduct, type ProductRef } from "@/components/products/product-picker";
 import { UserAvatar } from "@/components/ui/brand";
-import { canAssign, hasCompanyWideAccess } from "@/lib/auth/permissions";
+import { canAssign, canMakeChanges, hasCompanyWideAccess } from "@/lib/auth/permissions";
+import { CONFIDENCE_CHOICES, confidenceLevel } from "@/lib/scoring/confidence";
+
+const CONFIDENCE_STYLE = {
+  high: "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30",
+  medium: "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30",
+  low: "bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/30",
+  none: "bg-slate-50 text-slate-500 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700",
+} as const;
+
+/** Confidence chip for one factor; editable (with a comment) when onSet is given. */
+function ConfidenceControl({
+  value, imported, manual, setBy, onSet,
+}: {
+  value: string | null;
+  imported: string | null;
+  manual: boolean;
+  setBy?: string | null;
+  onSet?: (v: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [custom, setCustom] = useState("");
+  const level = confidenceLevel(value) ?? "none";
+  const chip = (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${CONFIDENCE_STYLE[level]}`}
+      title={manual ? `Set by ${setBy || "a team member"}${imported ? ` · imported: ${imported}` : ""}` : value ? "From the import" : "No confidence given"}
+    >
+      {value ? `${value} confidence` : "Confidence —"}
+      {manual && <span className="font-normal opacity-70">· set</span>}
+      {onSet && <ChevronDown className="h-3 w-3 opacity-60" />}
+    </span>
+  );
+  if (!onSet) return chip;
+  const pick = (v: string | null) => {
+    setOpen(false);
+    setCustom("");
+    onSet(v);
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label="Change confidence" className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+          {chip}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="center" className="w-56 p-1.5">
+        <p className="px-2.5 py-1.5 text-xs font-semibold text-slate-500">Confidence</p>
+        {CONFIDENCE_CHOICES.map((c) => (
+          <button
+            key={c}
+            onClick={() => pick(c)}
+            className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            {c}
+            {value === c && <Check className="h-4 w-4 text-blue-600" />}
+          </button>
+        ))}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (custom.trim()) pick(custom.trim());
+          }}
+          className="mt-1 flex gap-1.5 border-t border-slate-100 px-1 pt-2 dark:border-slate-800"
+        >
+          <input
+            value={custom}
+            onChange={(e) => setCustom(e.target.value)}
+            placeholder="e.g. 80%"
+            aria-label="Confidence percentage"
+            className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-sm focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900"
+          />
+          <button type="submit" className="rounded-md bg-blue-600 px-2 text-xs font-semibold text-white hover:bg-blue-700">Set</button>
+        </form>
+        {manual && (
+          <button
+            onClick={() => pick(null)}
+            className="mt-1 w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            Use imported value{imported ? ` (${imported})` : " (none)"}
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 interface AlertDetail {
   alert: {
@@ -38,11 +125,35 @@ interface AlertDetail {
     source_name: string;
     source_url: string;
     topic_match: string;
+    category_user_defined?: string | null;
+    key_dates?: string | null;
+    date_relevance?: string | null;
+    status_summary?: string | null;
+    status_details?: string | null;
+    timing_summary?: string | null;
+    timing_details?: string | null;
+    change_summary?: string | null;
+    change_details?: string | null;
+    source_context?: string | null;
+    source_context_summary?: string | null;
+    source_context_details?: string | null;
     local_state: string;
     record_version: number;
     group_id: string | null;
     group_title: string | null;
     group_path?: string[] | null;
+    version_type?: VersionType | null;
+    grouping?: { method: GroupingMethod | null; confidence: number | null; basis: string | null; reviewed: boolean };
+    identifiers?: Array<{ kind: IdentifierKind; value: string; source: string }>;
+    human_review?: {
+      required: boolean;
+      reason: string | null;
+      from_import: boolean;
+      flagged_at: string | null;
+      flagged_by_name: string | null;
+      cleared_at: string | null;
+      cleared_by_name: string | null;
+    };
     ownership: {
       type: string;
       effective_owner_id?: string | null;
@@ -76,7 +187,8 @@ interface AlertDetail {
     lifecycle_state: string;
     applies_to: string;
   }>;
-  source_factors: Array<{ factor_key: string; original_value: string; parsed_value: number | null; rationale: string }>;
+  source_factors: Array<{ factor_key: string; original_value: string; parsed_value: number | null; rationale: string; confidence?: string | null }>;
+  factor_confidence?: Array<{ factor_key: string; confidence: string; set_at: string; set_by_name: string | null }>;
   active_overrides: Array<{ target: string; value: number; reason: string; expires_at: string | null }>;
   products: AttachedProduct[];
   /** Notes the viewer can see (team notes + their own private ones) */
@@ -138,6 +250,29 @@ function ActionButton({ icon: Icon, label, onClick, active }: { icon: React.Elem
   );
 }
 
+/** One topic from the feed: a label/value, a short summary, and full details behind "More". */
+function ContextItem({ title, value, summary, details }: { title: string; value?: string | null; summary?: string | null; details?: string | null }) {
+  if (!value && !summary && !details) return null;
+  return (
+    <div className="border-t border-slate-100 pt-3 first:border-t-0 first:pt-0 dark:border-slate-800">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <h5 className="text-xs font-semibold text-slate-500 dark:text-slate-400">{title}</h5>
+        {value && <span className="text-sm font-medium text-slate-900 dark:text-slate-100">{value}</span>}
+      </div>
+      {summary && <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-700 dark:text-slate-300">{summary}</p>}
+      {details && details !== summary && (
+        <details className="group mt-1">
+          <summary className="cursor-pointer list-none text-xs font-medium text-blue-600 hover:underline dark:text-blue-400">
+            <span className="group-open:hidden">Show details</span>
+            <span className="hidden group-open:inline">Hide details</span>
+          </summary>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-600 dark:text-slate-400">{details}</p>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function Section({ title, icon: Icon, children }: { title: string; icon?: React.ElementType; children: React.ReactNode }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700/70 dark:bg-slate-900/40">
@@ -146,6 +281,81 @@ function Section({ title, icon: Icon, children }: { title: string; icon?: React.
       </h4>
       {children}
     </section>
+  );
+}
+
+/** Family › Action › Version, how the alert got there, and the identifiers found on it. */
+function GroupingDetails({
+  alert,
+  canReview,
+  busy,
+  onReview,
+}: {
+  alert: AlertDetail["alert"];
+  canReview: boolean;
+  busy: boolean;
+  onReview: (d: "confirm" | "reject") => void;
+}) {
+  const g = alert.grouping;
+  const path = alert.group_path || (alert.group_title ? [alert.group_title] : []);
+  const pending = (g?.method === "similarity" || g?.method === "ai") && !g.reviewed;
+  const ids = alert.identifiers || [];
+  return (
+    <div className="space-y-2.5 text-sm">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {path.length ? (
+          path.map((p, i) => (
+            <span key={i} className="inline-flex items-center gap-1.5">
+              {i > 0 && <span className="text-slate-300">›</span>}
+              <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${i === 0 ? "bg-blue-50 text-blue-800 dark:bg-blue-500/10 dark:text-blue-200" : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"}`}>{p}</span>
+            </span>
+          ))
+        ) : (
+          <span className="text-xs text-slate-500">Not in a regulatory family yet</span>
+        )}
+        {alert.version_type && (
+          <>
+            <span className="text-slate-300">›</span>
+            <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-200" title="Version type (level 3)">
+              {VERSION_LABELS[alert.version_type] ?? alert.version_type}
+            </span>
+          </>
+        )}
+      </div>
+      {path.length > 0 && (
+        <p className="text-xs text-slate-600 dark:text-slate-400">
+          <span className="font-semibold text-slate-800 dark:text-slate-200">
+            {g?.method ? METHOD_LABELS[g.method] : "Grouped before automatic grouping"}
+            {g?.confidence ? ` · ${g.confidence}% confidence` : ""}
+          </span>
+          {g?.basis && <> — {g.basis}</>}
+        </p>
+      )}
+      {!path.length && g?.method === "manual" && g.basis && (
+        <p className="text-xs text-slate-600 dark:text-slate-400">Removed from automatic grouping by hand — {g.basis}</p>
+      )}
+      {pending && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+          <AlertTriangle className="h-3.5 w-3.5" /> Grouped by similar subject — needs a person to confirm.
+          {canReview && (
+            <span className="ml-auto flex gap-1.5">
+              <button type="button" disabled={busy} onClick={() => onReview("confirm")} className="rounded-md bg-white px-2 py-1 font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50 disabled:opacity-50 dark:bg-slate-900">Confirm</button>
+              <button type="button" disabled={busy} onClick={() => onReview("reject")} className="rounded-md bg-white px-2 py-1 font-semibold text-red-700 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50 dark:bg-slate-900">Reject</button>
+            </span>
+          )}
+        </div>
+      )}
+      {ids.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Fingerprint className="h-3.5 w-3.5 text-slate-400" aria-label="Identifiers" />
+          {ids.map((i) => (
+            <span key={`${i.kind}:${i.value}`} className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-700 dark:bg-slate-800 dark:text-slate-300" title={IDENTIFIER_LABELS[i.kind]}>
+              <span className="font-sans font-semibold text-slate-500">{IDENTIFIER_LABELS[i.kind]}</span> {i.kind === "bill" ? i.value.split(" ").slice(1).join(" ") : i.value}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -179,7 +389,8 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
   const [deadlineOpen, setDeadlineOpen] = useState(false);
   const [productsOpen, setProductsOpen] = useState(false);
 
-  const canEdit = userRole !== "risk_owner";
+  // Reviewers and risk owners can only look
+  const canEdit = canMakeChanges(userRole);
   const canAssignOwner = canAssign(userRole);
   const canGroup = hasCompanyWideAccess(userRole, session?.membership.access_scope ?? "");
   const canViewHistory = userRole !== "risk_owner";
@@ -248,7 +459,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
   );
   const toggleProduct = async (ref: ProductRef, attach: boolean) => {
     if (!alertId) return;
-    await setAlertProduct([alertId], ref, attach);
+    if (!(await setAlertProduct([alertId], ref, attach))) return;
     await load();
     setHistory(null);
     setFlash({ ok: true, text: attach ? `Attached “${ref.name}”` : `Removed “${ref.name}”` });
@@ -274,24 +485,70 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
     }
   }
 
-  const assign = (membershipId: string | null) => {
-    setAssignOpen(false);
-    return mutate(membershipId ? "Owner assigned" : "Owner removed", () =>
-      fetch(`/api/alerts/${alertId}/assign`, {
-        method: "POST",
+  const changeReview = async (flag: boolean) => {
+    if (!alertId) return;
+    const comment = await askChangeComment({
+      action: flag ? "Mark Needs review" : "Mark reviewed",
+      detail: flag ? "Say what needs checking" : "Say what you checked",
+    });
+    if (!comment) return;
+    setBusy(true);
+    try {
+      await setHumanReview([alertId], flag, comment);
+      await load();
+      setHistory(null);
+      setNotesCount(null);
+      setFlash({ ok: true, text: flag ? "Flagged for review" : "Marked reviewed" });
+      onChanged?.();
+    } catch (err) {
+      setFlash({ ok: false, text: err instanceof Error ? err.message : "Could not update review status" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setConfidence = async (factorKey: string, label: string, value: string | null) => {
+    if (!alertId) return;
+    const comment = await askChangeComment({
+      action: value ? `Set ${label} confidence to ${value}` : `Reset ${label} confidence to the imported value`,
+    });
+    if (!comment) return;
+    await mutate(value ? "Confidence updated" : "Confidence reset", () =>
+      fetch(`/api/alerts/${alertId}/confidence`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(membershipId ? { membership_id: membershipId } : { membership_id: null }),
+        body: JSON.stringify({ factor_key: factorKey, confidence: value, comment }),
       })
     );
   };
 
-  const setGroup = async (groupId: string) => {
+  const assign = async (membershipId: string | null) => {
+    setAssignOpen(false);
+    const who = members.find((m) => m.id === membershipId)?.display_name;
+    const comment = await askChangeComment({ action: membershipId ? `Assign owner: ${who ?? "team member"}` : "Remove owner" });
+    if (!comment) return;
+    return mutate(membershipId ? "Owner assigned" : "Owner removed", () =>
+      fetch(`/api/alerts/${alertId}/assign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ membership_id: membershipId, comment }),
+      })
+    );
+  };
+
+  const setGroup = async (groupId: string, knownComment?: string) => {
     setGroupOpen(false);
+    const g = groups.find((x) => x.id === groupId);
+    const comment = knownComment ?? (await askChangeComment({
+      action: `Move to group ${g ? (g.path || [g.title]).join(" › ") : ""}`,
+      detail: "Recorded as the basis for this grouping; automatic grouping won't move it again",
+    }));
+    if (!comment) return;
     return mutate("Added to group", () =>
       fetch(`/api/groups/${groupId}/alerts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ alert_id: alertId }),
+        body: JSON.stringify({ alert_id: alertId, comment }),
       })
     );
   };
@@ -299,17 +556,24 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
   const removeGroup = async () => {
     if (!data?.alert.group_id) return;
     setGroupOpen(false);
+    const comment = await askChangeComment({
+      action: `Remove from group ${(data.alert.group_path || [data.alert.group_title]).join(" › ")}`,
+      detail: "Automatic grouping won't put it back",
+    });
+    if (!comment) return;
     return mutate("Removed from group", () =>
-      fetch(`/api/groups/${data.alert.group_id}/alerts?alert_id=${alertId}`, { method: "DELETE" })
+      fetch(`/api/groups/${data.alert.group_id}/alerts?alert_id=${alertId}`, { method: "DELETE", headers: commentHeader(comment) })
     );
   };
 
   const createAndSetGroup = async (title: string, parentId: string | null) => {
     if (!title.trim()) return;
+    const comment = await askChangeComment({ action: `Create group “${title.trim()}” and move this alert into it`, detail: "Recorded as the basis for this grouping" });
+    if (!comment) return;
     setBusy(true);
     try {
       const g = await createGroup(title.trim(), parentId);
-      await setGroup(g.id);
+      await setGroup(g.id, comment);
       const res = await fetch("/api/groups");
       if (res.ok) setGroups((await res.json()).groups || []);
     } catch (err) {
@@ -337,8 +601,28 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
     onChanged?.();
   };
 
+  /** Confirm or reject a grouping made by subject similarity. */
+  const reviewGrouping = async (decision: "confirm" | "reject") => {
+    const path = (data?.alert.group_path || []).join(" › ");
+    const comment = await askChangeComment({
+      action: decision === "confirm" ? `Confirm automatic grouping into ${path}` : `Reject automatic grouping — remove from ${path}`,
+    });
+    if (!comment) return;
+    return mutate(decision === "confirm" ? "Grouping confirmed" : "Removed from group", () =>
+      fetch("/api/groups/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alert_id: alertId, decision, comment }),
+      })
+    );
+  };
+
   const clearOverride = async (target: string) => {
-    const ok = await mutate("Override cleared", () => fetch(`/api/alerts/${alertId}/score?target=${target}`, { method: "DELETE" }));
+    const comment = await askChangeComment({ action: `Remove the score adjustment for ${target.replace(/_/g, " ")}`, detail: "The calculated value is used again" });
+    if (!comment) return;
+    const ok = await mutate("Override cleared", () =>
+      fetch(`/api/alerts/${alertId}/score?target=${target}`, { method: "DELETE", headers: commentHeader(comment) })
+    );
     if (ok) setScoreOpen(false);
   };
 
@@ -361,7 +645,14 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
       const src = data?.source_factors.find((s) => s.factor_key === f.key);
       const ov = data?.active_overrides.find((o) => o.target === f.key);
       const eff = data?.assessment ? ((data.assessment as unknown as Record<string, number | null>)[`effective_${f.key}`] ?? null) : null;
-      return [f.key, { source: src?.parsed_value ?? null, override: ov?.value ?? null, effective: eff, rationale: src?.rationale || "" }];
+      const manualConf = data?.factor_confidence?.find((c) => c.factor_key === f.key);
+      return [f.key, {
+        source: src?.parsed_value ?? null, override: ov?.value ?? null, effective: eff, rationale: src?.rationale || "",
+        importedConfidence: src?.confidence ?? null,
+        confidence: manualConf?.confidence ?? src?.confidence ?? null,
+        confidenceManual: !!manualConf,
+        confidenceSetBy: manualConf?.set_by_name ?? null,
+      }];
     })
   );
 
@@ -425,7 +716,48 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                 </span>
               )}
               <StageBadge stage={data.alert.stage} />
+              {data.alert.human_review?.required && <NeedsReviewBadge reason={data.alert.human_review.reason} className="py-1" />}
+              {canEdit && data.alert.human_review && !data.alert.human_review.required && (
+                <button
+                  type="button"
+                  onClick={() => changeReview(true)}
+                  disabled={busy}
+                  className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-slate-500 hover:bg-amber-50 hover:text-amber-700 dark:hover:bg-amber-500/10 dark:hover:text-amber-300"
+                >
+                  <Eye className="h-3 w-3" /> Flag for review
+                </button>
+              )}
             </div>
+
+            {data.alert.human_review?.required && (
+              <div className="mt-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center dark:border-amber-500/30 dark:bg-amber-500/10">
+                <Eye className="hidden h-5 w-5 shrink-0 text-amber-600 sm:block dark:text-amber-300" />
+                <div className="min-w-0 flex-1 text-sm">
+                  <p className="font-semibold text-amber-900 dark:text-amber-200">Needs human review</p>
+                  <p className="mt-0.5 break-words text-amber-800/90 dark:text-amber-200/80">
+                    {data.alert.human_review.reason
+                      ? data.alert.human_review.reason
+                      : data.alert.human_review.from_import
+                      ? "The import file marked this alert for a person to check."
+                      : "Flagged for a person to check."}
+                  </p>
+                  <p className="mt-0.5 text-xs text-amber-700/80 dark:text-amber-300/70">
+                    {data.alert.human_review.from_import ? "From the import (needs_human_review)" : `Flagged by ${data.alert.human_review.flagged_by_name || "a team member"}`}
+                    {data.alert.human_review.flagged_at && ` · ${formatDate(data.alert.human_review.flagged_at)}`}
+                  </p>
+                </div>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => changeReview(false)}
+                    disabled={busy}
+                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-700 disabled:opacity-60"
+                  >
+                    <Check className="h-4 w-4" /> Mark reviewed
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Key facts */}
             <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -662,6 +994,14 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                     ))}
                   </div>
                 )}
+                <Section title="Regulatory grouping" icon={Layers}>
+                  <GroupingDetails
+                    alert={data.alert}
+                    canReview={canGroup && canEdit}
+                    busy={busy}
+                    onReview={reviewGrouping}
+                  />
+                </Section>
                 {(data.topics.length > 0 || data.tags.length > 0) && (
                   <Section title="Topics" icon={Tag}>
                     <div className="flex flex-wrap gap-1.5">
@@ -680,6 +1020,19 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                     {data.alert.summary && data.alert.summary !== data.alert.overview && (
                       <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-600 dark:text-slate-400">{data.alert.summary}</p>
                     )}
+                  </Section>
+                )}
+                {(data.alert.status_summary || data.alert.status_details || data.alert.timing_summary || data.alert.timing_details ||
+                  data.alert.change_summary || data.alert.change_details || data.alert.source_context || data.alert.source_context_summary ||
+                  data.alert.source_context_details || data.alert.key_dates || data.alert.date_relevance) && (
+                  <Section title="From the source" icon={FileText}>
+                    <div className="space-y-3">
+                      <ContextItem title="Status" value={data.alert.stage} summary={data.alert.status_summary} details={data.alert.status_details} />
+                      <ContextItem title="Timing" value={data.alert.timing_raw} summary={data.alert.timing_summary} details={data.alert.timing_details} />
+                      <ContextItem title="Change" value={data.alert.change_type} summary={data.alert.change_summary} details={data.alert.change_details} />
+                      <ContextItem title="Key dates" value={null} summary={data.alert.key_dates} details={data.alert.date_relevance} />
+                      <ContextItem title="Source context" value={data.alert.source_context} summary={data.alert.source_context_summary} details={data.alert.source_context_details} />
+                    </div>
                   </Section>
                 )}
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -799,6 +1152,15 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                           ) : (
                             <div className="text-[11px] text-slate-400">From source</div>
                           )}
+                          <div className="mt-2">
+                            <ConfidenceControl
+                              value={sf.confidence}
+                              imported={sf.importedConfidence}
+                              manual={sf.confidenceManual}
+                              setBy={sf.confidenceSetBy}
+                              onSet={canEdit ? (v) => setConfidence(f.key, f.label, v) : undefined}
+                            />
+                          </div>
                         </div>
                       );
                     })}
@@ -868,6 +1230,9 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                     ["Agency", data.alert.agency_name],
                     ["Source", data.alert.source_name],
                     ["Recommendation", data.alert.recommendation],
+                    ["Category (user)", data.alert.category_user_defined],
+                    ["Key dates", data.alert.key_dates],
+                    ["Date relevance", data.alert.date_relevance],
                     ["Relevance", data.alert.relevance],
                   ]
                     .filter(([, v]) => v)

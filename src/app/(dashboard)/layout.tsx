@@ -4,6 +4,7 @@ import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Toaster } from "@/components/layout/toaster";
+import { ChangeCommentHost } from "@/components/layout/change-comment";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { SessionContext, SessionRefreshContext, type SessionInfo } from "@/components/layout/session-context";
@@ -88,6 +89,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           </main>
           <Toaster />
+          <ChangeCommentHost />
         </div>
       </TooltipProvider>
       </SessionRefreshContext.Provider>

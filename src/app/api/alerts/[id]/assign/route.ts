@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canAssign, createAuditEvent } from "@/lib/auth-helpers";
+import { addChangeNotes, commentRequired, readChangeComment } from "@/lib/change-notes";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await getAuth();
@@ -10,6 +11,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const body = await request.json();
   const { membership_id, use_group_owner } = body;
+  const comment = readChangeComment(request, body);
+  if (!comment) return commentRequired();
 
   const alertRes = await query(
     `SELECT a.id, a.direct_owner_membership_id, a.primary_group_id, a.record_version,
@@ -64,7 +67,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   );
 
   await createAuditEvent(auth.company_id, auth.membership_id, "assign_owner", "alert", id,
-    { owner: beforeOwner }, { owner: newDirectOwner, effective: effectiveOwner, origin });
+    { owner: beforeOwner }, { owner: newDirectOwner, effective: effectiveOwner, origin }, comment);
+
+  const nameRes = newDirectOwner
+    ? await query(
+        `SELECT up.display_name FROM memberships m JOIN user_profiles up ON up.id = m.user_id WHERE m.id = $1`,
+        [newDirectOwner]
+      )
+    : null;
+  const action = use_group_owner
+    ? "Owner set to follow the group owner"
+    : newDirectOwner
+      ? `Owner assigned: ${nameRes?.rows[0]?.display_name ?? "a team member"}`
+      : "Owner removed";
+  await addChangeNotes(auth.company_id, [id], auth.membership_id, action, comment);
 
   return NextResponse.json({ success: true, effective_owner_id: effectiveOwner });
 }

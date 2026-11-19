@@ -139,6 +139,39 @@ export async function GET(request: NextRequest) {
     filters.push(`(p.effective_total IS NULL OR p.latest_assessment_id IS NULL)`);
   }
 
+  // Filter: one jurisdiction as written in the feed ("United States - Pennsylvania (State)"; "(National)" optional)
+  const jurisdiction = searchParams.get("jurisdiction");
+  if (jurisdiction && jurisdiction.trim()) {
+    filters.push(`(a.jurisdiction_raw = $${paramIdx} OR regexp_replace(COALESCE(a.jurisdiction_raw, ''), '\s*\(national\)\s*$', '', 'i') = $${paramIdx})`);
+    params.push(jurisdiction.trim());
+    paramIdx++;
+  }
+
+  // Filter: product (family or model), directly attached to the alert, confirmed or suggested
+  const productRefs = list("product");
+  if (productRefs.length) {
+    const familyIds = productRefs.filter((r) => r.startsWith("family:")).map((r) => r.slice(7)).filter((id) => UUID_RE.test(id));
+    const modelIds = productRefs.filter((r) => r.startsWith("model:")).map((r) => r.slice(6)).filter((id) => UUID_RE.test(id));
+    const states = searchParams.get("product_state") === "confirmed" ? ["confirmed"] : searchParams.get("product_state") === "suggested" ? ["suggested"] : ["confirmed", "suggested"];
+    if (!familyIds.length && !modelIds.length) {
+      filters.push("FALSE");
+    } else {
+      filters.push(`EXISTS (
+        SELECT 1 FROM alert_product_links pl
+        LEFT JOIN products pm ON pm.id = pl.product_id
+        WHERE pl.alert_id = a.id AND pl.company_id = a.company_id AND pl.state::text = ANY($${paramIdx + 2}::text[])
+          AND (pl.family_id = ANY($${paramIdx}::uuid[]) OR pm.family_id = ANY($${paramIdx}::uuid[]) OR pl.product_id = ANY($${paramIdx + 1}::uuid[]))
+      )`);
+      params.push(familyIds, modelIds, states);
+      paramIdx += 3;
+    }
+  }
+
+  // Filter: flagged for human review (Needs Human Review column, or flagged by a person)
+  if (searchParams.get("human_review") === "true") {
+    filters.push(`a.human_review_required`);
+  }
+
   // Full-text search
   if (searchQuery && searchQuery.trim()) {
     filters.push(`(
@@ -206,6 +239,8 @@ export async function GET(request: NextRequest) {
        a.local_state,
        a.timing_raw,
        a.record_version,
+       a.human_review_required,
+       a.human_review_reason,
        p.effective_total,
        p.effective_priority,
        p.next_compliance_deadline,
@@ -290,6 +325,8 @@ export async function GET(request: NextRequest) {
     owner_name: row.owner_name,
     owner_avatar: row.owner_avatar || null,
     record_version: row.record_version,
+    needs_human_review: !!row.human_review_required,
+    human_review_reason: row.human_review_reason || null,
   }));
 
   return NextResponse.json({

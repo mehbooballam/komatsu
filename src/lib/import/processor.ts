@@ -5,11 +5,17 @@ import {
   FACTOR_KEY_MAP,
   RATIONALE_COLUMNS,
   FACTOR_COLUMNS,
+  CONFIDENCE_COLUMNS,
+  CONTEXT_TEXT_COLUMNS,
   type ImportColumnName,
 } from "./constants";
 import type { ValidatedRow } from "./validator";
 import { resolveJurisdiction } from "@/lib/geo/countries";
 import { getAsOfDate, recalculateAlert } from "@/lib/scoring/recalculate";
+import { runGrouping, type GroupingResult } from "@/lib/grouping/engine";
+import { loadAiSettings } from "@/lib/ai/settings";
+import { startAiGrouping } from "@/lib/grouping/ai";
+import { refreshThemes } from "@/lib/grouping/themes";
 import { matchImportedProducts, type ProductMatchResult } from "./product-matching";
 
 export interface ProcessResult {
@@ -22,6 +28,78 @@ export interface ProcessResult {
   errors: { rowNumber: number; message: string }[];
   /** Products matched from the file's Product column (suggested links; nothing is created). */
   products?: ProductMatchResult;
+  /** What automatic regulatory-family grouping did after the import. */
+  grouping?: GroupingResult;
+  /** Alerts the file's Needs Human Review column flagged (or un-flagged) in this import. */
+  human_review?: { flagged: number; cleared: number };
+  /** AI grouping started after the import, if set up in Settings */
+  ai_grouping?: { run_id: string; mode: "review" | "apply" };
+}
+
+type DbClient = Awaited<ReturnType<typeof getClient>>;
+type HumanReview = { flag: boolean; reason: string | null } | null | undefined;
+
+/**
+ * Applies the file's Needs Human Review value to an alert.
+ * - Yes, when the feed did not already say yes → flag the alert (again).
+ * - No, after the feed had said yes and nobody has cleared it yet → clear it.
+ * - Same answer as last import → nothing changes, so a person's decision sticks.
+ * Each change leaves a note on the alert, signed as the system.
+ */
+async function applyHumanReview(
+  client: DbClient,
+  companyId: string,
+  alertId: string,
+  review: HumanReview,
+  result: ProcessResult
+) {
+  if (!review) return;
+  const cur = await client.query(
+    `SELECT human_review_required, human_review_source FROM alerts WHERE id = $1`,
+    [alertId]
+  );
+  const prev = cur.rows[0];
+  if (!prev) return;
+
+  let action: string | null = null;
+  let body = "";
+  if (review.flag && prev.human_review_source !== true) {
+    await client.query(
+      `UPDATE alerts SET human_review_required = TRUE, human_review_source = TRUE, human_review_reason = $2,
+              human_review_flagged_at = now(), human_review_flagged_by = NULL,
+              human_review_cleared_at = NULL, human_review_cleared_by = NULL
+       WHERE id = $1`,
+      [alertId, review.reason]
+    );
+    action = "Marked Needs review";
+    body = review.reason ? `Import file: Needs Human Review = Yes — ${review.reason}` : "Import file: Needs Human Review = Yes";
+    if (result.human_review) result.human_review.flagged++;
+  } else if (review.flag) {
+    // Still yes: keep the current state, but pick up a changed reason
+    if (review.reason) {
+      await client.query(`UPDATE alerts SET human_review_reason = $2 WHERE id = $1 AND human_review_required`, [alertId, review.reason]);
+    }
+  } else if (prev.human_review_source === true && prev.human_review_required) {
+    await client.query(
+      `UPDATE alerts SET human_review_required = FALSE, human_review_source = FALSE,
+              human_review_cleared_at = now(), human_review_cleared_by = NULL
+       WHERE id = $1`,
+      [alertId]
+    );
+    action = "Cleared Needs review";
+    body = "Import file: Needs Human Review = No";
+    if (result.human_review) result.human_review.cleared++;
+  } else {
+    await client.query(`UPDATE alerts SET human_review_source = FALSE WHERE id = $1`, [alertId]);
+  }
+
+  if (action) {
+    await client.query(
+      `INSERT INTO alert_notes (company_id, alert_id, author_membership_id, body, visibility, kind, action)
+       VALUES ($1, $2, NULL, $3, 'team', 'change', $4)`,
+      [companyId, alertId, body, action]
+    );
+  }
 }
 
 function computeRowHash(mapped: Partial<Record<ImportColumnName, string | null>>): string {
@@ -55,6 +133,7 @@ export async function processImportBatch(
     invalid: 0,
     conflicts: 0,
     errors: [],
+    human_review: { flagged: 0, cleared: 0 },
   };
 
   const processableRows = rows
@@ -96,6 +175,7 @@ export async function processImportBatch(
 
         if (existingResult.rows.length === 0) {
           const newAlertId = await createAlert(client, companyId, feedId, row, batchId, rowHash);
+          await applyHumanReview(client, companyId, newAlertId, row.parsed.needs_human_review as HumanReview, result);
           await client.query(
             `UPDATE import_rows SET state = 'created', alert_id = $1 WHERE batch_id = $2 AND row_number = $3`,
             [newAlertId, batchId, row.rowNumber]
@@ -112,6 +192,7 @@ export async function processImportBatch(
             result.unchanged++;
           } else {
             await updateAlert(client, companyId, feedId, existing, row, batchId, rowHash, updateMode);
+            await applyHumanReview(client, companyId, existing.id, row.parsed.needs_human_review as HumanReview, result);
             await client.query(
               `UPDATE import_rows SET state = 'updated', alert_id = $1 WHERE batch_id = $2 AND row_number = $3`,
               [existing.id, batchId, row.rowNumber]
@@ -212,6 +293,29 @@ async function postProcessAlerts(companyId: string, alertIds: string[], result: 
     console.error("Product matching after import failed:", err);
     result.errors.push({ rowNumber: 0, message: "Alerts saved, but matching products to the inventory failed." });
   }
+
+  // Theme = first topic (used to group what no regulation group is found for)
+  await refreshThemes(companyId).catch((err) => console.error("Refreshing themes failed:", err));
+
+  // Group the alerts into regulatory families (exact identifiers, then CFR part, then subject similarity)
+  try {
+    result.grouping = await runGrouping(companyId);
+  } catch (err) {
+    console.error("Automatic grouping after import failed:", err);
+    result.errors.push({ rowNumber: 0, message: "Alerts saved, but automatic grouping failed." });
+  }
+
+  // AI grouping for what the rules above could not place (runs in the background)
+  try {
+    const ai = await loadAiSettings(companyId);
+    if (ai.enabled && ai.after_import !== "off") {
+      const run = await startAiGrouping(companyId, { mode: ai.after_import === "apply" ? "apply" : "review", scope: "ungrouped", trigger: "import", membershipId: null });
+      result.ai_grouping = { run_id: run.runId, mode: ai.after_import };
+    }
+  } catch (err) {
+    console.error("Starting AI grouping after import failed:", err);
+    result.errors.push({ rowNumber: 0, message: `Alerts saved, but AI grouping could not start: ${err instanceof Error ? err.message : "unknown error"}` });
+  }
 }
 
 async function createAlert(
@@ -257,6 +361,14 @@ async function createAlert(
 
   const newAlertId = alertResult.rows[0].id;
 
+  const contextCols = CONTEXT_TEXT_COLUMNS.filter((c) => p[c]);
+  if (contextCols.length) {
+    await client.query(
+      `UPDATE alerts SET ${contextCols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE id = $1`,
+      [newAlertId, ...contextCols.map((c) => p[c] as string)]
+    );
+  }
+
   const importRowResult = await client.query(
     `SELECT id FROM import_rows WHERE batch_id = $1 AND row_number = $2`,
     [batchId, row.rowNumber]
@@ -288,21 +400,22 @@ async function createAlert(
     const factorKey = FACTOR_KEY_MAP[col];
     const rationaleCol = RATIONALE_COLUMNS[factorKey];
     const rationale = p[rationaleCol] as string | null | undefined;
+    const confidence = (p[CONFIDENCE_COLUMNS[factorKey]] as string | undefined) ?? null;
 
-    if (rawVal !== null && rawVal !== undefined) {
+    if ((rawVal !== null && rawVal !== undefined) || confidence) {
       await client.query(
-        `INSERT INTO source_factor_ratings (company_id, alert_source_revision_id, factor_key, original_value, parsed_value, rationale)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [companyId, revisionId, factorKey, rawVal, parsedVal ?? null, rationale ?? null]
+        `INSERT INTO source_factor_ratings (company_id, alert_source_revision_id, factor_key, original_value, parsed_value, rationale, confidence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [companyId, revisionId, factorKey, rawVal ?? null, parsedVal ?? null, rationale ?? null, confidence]
       );
     }
   }
 
-  if (p.deadline_date && typeof p.deadline_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.deadline_date)) {
+  if (p.compliance_deadline && typeof p.compliance_deadline === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.compliance_deadline)) {
     await client.query(
       `INSERT INTO alert_deadlines (company_id, alert_id, kind, date_value, applies_to, verification_state, origin)
        VALUES ($1, $2, 'unknown', $3, NULL, 'unverified', 'import')`,
-      [companyId, newAlertId, p.deadline_date]
+      [companyId, newAlertId, p.compliance_deadline]
     );
   }
 
@@ -383,6 +496,7 @@ async function updateAlert(
     { dbCol: "agency_name", parsed: "agency_name" },
     { dbCol: "source_name", parsed: "source" },
     { dbCol: "source_url", parsed: "link" },
+    ...CONTEXT_TEXT_COLUMNS.map((c) => ({ dbCol: c as string, parsed: c as ImportColumnName })),
   ];
 
   for (const field of sourceFields) {
@@ -452,26 +566,27 @@ async function updateAlert(
     const factorKey = FACTOR_KEY_MAP[col];
     const rationaleCol = RATIONALE_COLUMNS[factorKey];
     const rationale = p[rationaleCol] as string | null | undefined;
+    const confidence = (p[CONFIDENCE_COLUMNS[factorKey]] as string | undefined) ?? null;
 
-    if (rawVal !== null && rawVal !== undefined) {
+    if ((rawVal !== null && rawVal !== undefined) || confidence) {
       await client.query(
-        `INSERT INTO source_factor_ratings (company_id, alert_source_revision_id, factor_key, original_value, parsed_value, rationale)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [companyId, revisionId, factorKey, rawVal, parsedVal ?? null, rationale ?? null]
+        `INSERT INTO source_factor_ratings (company_id, alert_source_revision_id, factor_key, original_value, parsed_value, rationale, confidence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [companyId, revisionId, factorKey, rawVal ?? null, parsedVal ?? null, rationale ?? null, confidence]
       );
     }
   }
 
-  if (p.deadline_date && typeof p.deadline_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.deadline_date)) {
+  if (p.compliance_deadline && typeof p.compliance_deadline === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.compliance_deadline)) {
     const existingDeadline = await client.query(
       `SELECT id FROM alert_deadlines WHERE alert_id = $1 AND date_value = $2 AND lifecycle_state = 'outstanding'`,
-      [alertId, p.deadline_date]
+      [alertId, p.compliance_deadline]
     );
     if (existingDeadline.rows.length === 0) {
       await client.query(
         `INSERT INTO alert_deadlines (company_id, alert_id, kind, date_value, applies_to, verification_state, origin)
          VALUES ($1, $2, 'unknown', $3, NULL, 'unverified', 'import')`,
-        [companyId, alertId, p.deadline_date]
+        [companyId, alertId, p.compliance_deadline]
       );
     }
   }

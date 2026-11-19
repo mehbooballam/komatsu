@@ -11,6 +11,7 @@ import { UserAvatar } from "@/components/ui/brand";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ConfirmDialog, deleteAlertsRequest } from "@/components/alerts/confirm-dialog";
 import { useSessionInfo } from "@/components/layout/session-context";
+import { askChangeComment } from "@/components/layout/change-comment";
 import { canAssign, hasCompanyWideAccess } from "@/lib/auth/permissions";
 
 export interface AlertRow {
@@ -36,6 +37,9 @@ export interface AlertRow {
   /** Band from the numeric score alone (before escalation rules). */
   score_band?: string | null;
   escalation_reasons?: Array<{ description: string; resulting_band: string }> | null;
+  /** Flagged for a person to check (import column needs_human_review, or flagged by hand) */
+  needs_human_review?: boolean;
+  human_review_reason?: string | null;
 }
 
 interface Member { id: string; display_name: string; email: string; avatar?: string | null }
@@ -210,23 +214,47 @@ export function useAssignables(loadMembers = true, loadGroups = loadMembers) {
   return { members, groups, setGroups };
 }
 
-export async function assignAlerts(ids: string[], membershipId: string | null) {
+export async function assignAlerts(ids: string[], membershipId: string | null, comment: string) {
   for (const id of ids) {
     const res = await fetch(`/api/alerts/${id}/assign`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ membership_id: membershipId }),
+      body: JSON.stringify({ membership_id: membershipId, comment }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Assignment failed");
   }
 }
 
-export async function groupAlerts(ids: string[], groupId: string) {
+/** Flag alerts for human review (true) or mark them reviewed (false). Returns how many changed. */
+export async function setHumanReview(ids: string[], needsReview: boolean, comment: string): Promise<number> {
+  const res = await fetch("/api/alerts/human-review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ alert_ids: ids, needs_review: needsReview, comment }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Could not update review status");
+  return data.changed ?? 0;
+}
+
+/** Amber "Needs review" pill; the reason (if any) shows on hover. */
+export function NeedsReviewBadge({ reason, className = "" }: { reason?: string | null; className?: string }) {
+  return (
+    <span
+      title={reason ? `Needs review: ${reason}` : "Flagged for human review"}
+      className={`inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-300/60 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30 ${className}`}
+    >
+      <Eye className="h-3 w-3" /> Needs review
+    </span>
+  );
+}
+
+export async function groupAlerts(ids: string[], groupId: string, comment: string) {
   for (const id of ids) {
     const res = await fetch(`/api/groups/${groupId}/alerts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ alert_id: id }),
+      body: JSON.stringify({ alert_id: id, comment }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Grouping failed");
   }
@@ -475,32 +503,66 @@ export function AlertsTable({
     }
   }
 
-  const doAssign = (ids: string[], memberId: string | null) =>
-    run(memberId ? `Assigned ${ids.length} alert${ids.length > 1 ? "s" : ""}` : "Owner removed", async () => {
-      await assignAlerts(ids, memberId);
-      setSelected(new Set());
-    });
+  const plural = (ids: string[]) => `${ids.length} alert${ids.length > 1 ? "s" : ""}`;
 
-  const doGroup = (ids: string[], groupId: string) => {
-    const g = groups.find((x) => x.id === groupId);
-    const title = g ? (g.path || [g.title]).join(" › ") : "group";
-    return run(`Added ${ids.length} alert${ids.length > 1 ? "s" : ""} to “${title}”`, async () => {
-      await groupAlerts(ids, groupId);
+  const doAssign = async (ids: string[], memberId: string | null) => {
+    setMenuFor(null);
+    setBulk(null);
+    const who = members.find((m) => m.id === memberId)?.display_name;
+    const comment = await askChangeComment({ action: memberId ? `Assign owner: ${who ?? "team member"}` : "Remove owner", detail: plural(ids) });
+    if (!comment) return;
+    return run(memberId ? `Assigned ${plural(ids)}` : "Owner removed", async () => {
+      await assignAlerts(ids, memberId, comment);
       setSelected(new Set());
     });
   };
 
-  const doCreateGroup = (ids: string[], title: string, parentId: string | null) =>
-    run(`Created “${title}” and added ${ids.length} alert${ids.length > 1 ? "s" : ""}`, async () => {
+  const doGroup = async (ids: string[], groupId: string) => {
+    setMenuFor(null);
+    setBulk(null);
+    const g = groups.find((x) => x.id === groupId);
+    const title = g ? (g.path || [g.title]).join(" › ") : "group";
+    const comment = await askChangeComment({ action: `Move to group ${title}`, detail: `${plural(ids)} · recorded as the basis for this grouping` });
+    if (!comment) return;
+    return run(`Added ${plural(ids)} to “${title}”`, async () => {
+      await groupAlerts(ids, groupId, comment);
+      setSelected(new Set());
+    });
+  };
+
+  const doCreateGroup = async (ids: string[], title: string, parentId: string | null) => {
+    setMenuFor(null);
+    setBulk(null);
+    const comment = await askChangeComment({ action: `Create group “${title}” and move alerts into it`, detail: `${plural(ids)} · recorded as the basis for this grouping` });
+    if (!comment) return;
+    return run(`Created “${title}” and added ${plural(ids)}`, async () => {
       const g = await createGroup(title, parentId);
-      await groupAlerts(ids, g.id);
+      await groupAlerts(ids, g.id, comment);
       // Reload so the new group lands in its place in the tree
       const res = await fetch("/api/groups");
       if (res.ok) setGroups((await res.json()).groups || []);
       setSelected(new Set());
     });
+  };
+
+  const doReview = async (ids: string[], flag: boolean) => {
+    setMenuFor(null);
+    setBulk(null);
+    const comment = await askChangeComment({
+      action: flag ? "Mark Needs review" : "Mark reviewed",
+      detail: flag ? `${plural(ids)} · say what needs checking` : `${plural(ids)} · say what you checked`,
+    });
+    if (!comment) return;
+    let changed = 0;
+    return run(flag ? "Flagged for review" : "Marked reviewed", async () => {
+      changed = await setHumanReview(ids, flag, comment);
+      setSelected(new Set());
+      if (changed === 0) throw new Error(flag ? "Already flagged for review" : "None of these were flagged for review");
+    });
+  };
 
   const sortProps = { sortBy, sortDir, onSort };
+  const selectedFlagged = alerts.filter((a) => selected.has(a.id) && a.needs_human_review).map((a) => a.id);
 
   const selectedIds = [...selected];
 
@@ -541,6 +603,21 @@ export function AlertsTable({
               <BulkProductsPicker alertIds={selectedIds} onChanged={(text) => { setMessage({ ok: true, text }); onChanged?.(); }} />
             </PopoverContent>
           </Popover>
+          {canEdit && (selectedFlagged.length > 0 ? (
+            <button
+              onClick={() => doReview(selectedFlagged, false)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-sm font-medium hover:bg-white/20"
+            >
+              <Check className="h-4 w-4" /> Mark reviewed{selectedFlagged.length < selectedIds.length ? ` (${selectedFlagged.length})` : ""}
+            </button>
+          ) : (
+            <button
+              onClick={() => doReview(selectedIds, true)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-sm font-medium hover:bg-white/20"
+            >
+              <Eye className="h-4 w-4" /> Flag for review
+            </button>
+          ))}
           {canDelete && (
             <button
               onClick={() => setPendingDelete(selectedIds)}
@@ -643,6 +720,7 @@ export function AlertsTable({
                             {a.title}
                           </div>
                           <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                            {a.needs_human_review && <NeedsReviewBadge reason={a.human_review_reason} />}
                             {a.group_id && a.group_title && (
                               <GroupLabel
                                 id={a.group_id}

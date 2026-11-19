@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { normalizeHeader, IMPORT_COLUMNS, type ImportColumnName } from "./constants";
+import { normalizeHeader, type ImportColumnName } from "./constants";
 
 export interface ParsedRow {
   rowNumber: number;
@@ -10,6 +10,8 @@ export interface ParsedRow {
 
 export interface ParseResult {
   rows: ParsedRow[];
+  /** Every column header in file order (repeated names once) */
+  headers: string[];
   worksheetName: string;
   headerRow: number;
   detectedHeaders: string[];
@@ -121,19 +123,17 @@ export function parseXlsx(
     warnings.push(`Duplicate headers detected: ${duplicateHeaders.join(", ")}`);
   }
 
-  const headerColMap: { col: number; rawHeader: string; mapped: ImportColumnName }[] = [];
-  let colIdx = 0;
+  // Every named column is read (raw values are kept even when it is not mapped);
+  // a repeated header name keeps its first column.
+  const headerColMap: { col: number; rawHeader: string; mapped: ImportColumnName | null }[] = [];
+  const seenHeaders = new Set<string>();
   for (let col = range.s.c; col <= range.e.c; col++) {
     const cellAddr = XLSX.utils.encode_cell({ r: headerRowIdx, c: col });
     const cell = sheet[cellAddr];
     const rawHeader = cellToString(cell, date1904)?.trim() ?? "";
-    if (!rawHeader) continue;
-
-    const mapped = mappedHeaders[rawHeader];
-    if (mapped) {
-      headerColMap.push({ col, rawHeader, mapped });
-    }
-    colIdx++;
+    if (!rawHeader || seenHeaders.has(rawHeader)) continue;
+    seenHeaders.add(rawHeader);
+    headerColMap.push({ col, rawHeader, mapped: mappedHeaders[rawHeader] ?? null });
   }
 
   const rows: ParsedRow[] = [];
@@ -149,14 +149,10 @@ export function parseXlsx(
       const value = cellToString(cell, date1904);
 
       raw[hcm.rawHeader] = value;
+      if (value !== null && value.trim() !== "") isEmptyRow = false;
+      if (!hcm.mapped) continue;
       presentColumns.add(hcm.mapped);
-
-      if (value !== null && value.trim() !== "") {
-        isEmptyRow = false;
-        mapped[hcm.mapped] = value.trim();
-      } else {
-        mapped[hcm.mapped] = null;
-      }
+      mapped[hcm.mapped] = value !== null && value.trim() !== "" ? value.trim() : null;
     }
 
     if (isEmptyRow) continue;
@@ -171,6 +167,7 @@ export function parseXlsx(
 
   return {
     rows,
+    headers: headerColMap.map((h) => h.rawHeader),
     worksheetName: sheetName,
     headerRow: headerRowIdx + 1,
     detectedHeaders,

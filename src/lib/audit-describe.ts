@@ -18,7 +18,7 @@ export type Refs = Record<string, { kind: string; name: string }>;
 export type Part = string | { b: string; href?: string };
 
 export interface Described {
-  category: "alerts" | "groups" | "products" | "imports" | "scoring" | "workspace" | "account" | "other";
+  category: "alerts" | "groups" | "products" | "imports" | "scoring" | "reports" | "workspace" | "account" | "other";
   summary: Part[];
   changes: Array<{ label: string; before?: string; after?: string }>;
   note?: string;
@@ -142,6 +142,7 @@ const CATEGORY: Record<string, Described["category"]> = {
   product_family: "products",
   import_batch: "imports",
   scoring_policy: "scoring",
+  risk_report: "reports",
   company: "workspace",
   invitation: "workspace",
   team: "workspace",
@@ -169,6 +170,7 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
   const note = e.reason || undefined;
   const alert = () => named(e.entity_id, refs, null, "a deleted alert", alertHref);
   const group = (id: unknown = e.entity_id, fallback?: unknown) => named(id, refs, fallback, "a deleted group", groupHref);
+  const report = (v: Record<string, unknown>) => named(e.entity_id, refs, v.title, "a deleted report", (id) => `/reports/${id}`);
   const product = (v: Record<string, unknown>) =>
     v.product_id ? named(v.product_id, refs, null, "a deleted product") : named(v.family_id, refs, null, "a deleted product family");
 
@@ -183,6 +185,14 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
       };
     case "profile_updated":
       return { category: "account", summary: ["Updated their profile"], changes: diff(before, after, refs) };
+    case "member.created":
+      return {
+        category: "workspace",
+        summary: ["Set up ", { b: String(a.name ?? a.email ?? "a member") }, a.new_account ? " as a new user" : " (existing account added)"],
+        changes: [{ label: "Role", after: String(a.role ?? "").replace(/_/g, " ") }, { label: "Email", after: String(a.email ?? "") }],
+      };
+    case "member.revoked":
+      return { category: "workspace", summary: ["Revoked the access of ", { b: String(b.name ?? b.email ?? "a member") }], changes: [] };
     case "invitation.accepted":
       return { category: "workspace", summary: ["Joined the workspace"], changes: [] };
     case "company.created":
@@ -260,6 +270,17 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
       };
     case "alert_updated":
       return { category: "alerts", summary: ["Updated ", alert()], changes: diff(before, after, refs), note };
+    case "factor_confidence_set":
+      return {
+        category: "alerts",
+        summary: ["Changed ", { b: formatValue(a.factor_key ?? b.factor_key, refs) }, " confidence on ", alert()],
+        changes: [{ label: "Confidence", before: formatValue(b.confidence ?? "Imported value", refs), after: formatValue(a.confidence ?? "Imported value", refs) }],
+        note,
+      };
+    case "human_review_flagged":
+      return { category: "alerts", summary: ["Marked ", alert(), " as ", { b: "Needs review" }], changes: [], note };
+    case "human_review_cleared":
+      return { category: "alerts", summary: ["Marked ", alert(), " as ", { b: "reviewed" }], changes: [], note };
     case "geography_mapping_updated": {
       const countries = (value: unknown) =>
         Array.isArray(value) && value.length ? value.join(", ") : "Unmapped";
@@ -307,6 +328,62 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
         changes: parts.length ? [{ label: "Result", after: parts.join(", ") }] : [],
       };
     }
+    case "ai_settings_updated":
+      return {
+        category: "workspace",
+        summary: ["Changed the AI grouping settings"],
+        changes: Object.entries(a).map(([k, v]) => ({ label: k.replace(/_/g, " "), after: formatValue(v, refs) })),
+      };
+    case "theme_grouping":
+      return {
+        category: "groups",
+        summary: [a.automatic ? "Alerts without a regulation group were grouped by theme" : "Grouped alerts by theme", ` (${Number(a.placed ?? 0)} alerts)`],
+        changes: Array.isArray(a.by_theme)
+          ? (a.by_theme as Array<{ theme: string; alerts: number }>).map((t) => ({ label: t.theme, after: `${t.alerts} alert${t.alerts === 1 ? "" : "s"}` }))
+          : [],
+        note,
+      };
+    case "ai_grouping_applied":
+      return {
+        category: "groups",
+        summary: [a.automatic ? "AI grouping was applied automatically" : "Applied AI grouping", ` (${Number(a.alerts_placed ?? 0)} alerts, ${Number(a.groups_created ?? 0)} new groups)`],
+        changes: [],
+        note,
+      };
+    case "import_cancelled":
+      return { category: "imports", summary: ["Cancelled the import of ", { b: String(b.filename ?? "a file") }], changes: [] };
+    case "import_mapping_changed":
+      return {
+        category: "imports",
+        summary: ["Changed the column mapping of ", named(e.entity_id, refs, null, "an import")],
+        changes: Array.isArray(a.changes)
+          ? (a.changes as Array<{ header: string; before: string | null; after: string | null }>).slice(0, 20).map((c) => ({
+              label: c.header,
+              before: c.before ?? "Not imported",
+              after: c.after ?? "Not imported",
+            }))
+          : [],
+      };
+    case "import_mapping_saved":
+      return { category: "imports", summary: ["Saved the import mapping ", { b: String(a.name ?? "") }], changes: [] };
+    case "import_mapping_deleted":
+      return { category: "imports", summary: ["Deleted the import mapping ", { b: String(b.name ?? "") }], changes: [] };
+    /* ---- Monthly reports ---- */
+    case "report_created":
+      return {
+        category: "reports",
+        summary: ["Started the monthly report ", report(a)],
+        changes: a.copied_from ? [{ label: "Started from", after: "Previous month's report" }] : [],
+      };
+    case "report_updated":
+      return { category: "reports", summary: ["Renamed the monthly report ", report(b)], changes: diff(before, after, refs) };
+    case "report_published":
+      return { category: "reports", summary: ["Published the monthly report ", report(a)], changes: [] };
+    case "report_unpublished":
+      return { category: "reports", summary: ["Moved the monthly report ", report(a), " back to draft"], changes: [] };
+    case "report_deleted":
+      return { category: "reports", summary: ["Deleted the draft report ", { b: String(b.title ?? "a monthly report") }], changes: [] };
+
     case "scoring_policy_published":
       return {
         category: "scoring",

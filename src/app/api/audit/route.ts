@@ -13,6 +13,7 @@ const CATEGORIES: Record<string, string[]> = {
   products: ["product", "product_family"],
   imports: ["import_batch"],
   scoring: ["scoring_policy"],
+  reports: ["risk_report"],
   workspace: ["company", "invitation", "team"],
   account: ["user"],
 };
@@ -43,6 +44,7 @@ async function resolveNames(companyId: string, ids: string[]): Promise<Record<st
                JOIN memberships m ON m.user_id = up.id AND m.company_id = $1 WHERE up.id = ANY($2::uuid[])
      UNION ALL SELECT id::text, 'import', original_filename FROM import_batches WHERE company_id = $1 AND id = ANY($2::uuid[])
      UNION ALL SELECT id::text, 'workspace', name FROM companies WHERE id = $1 AND id = ANY($2::uuid[])
+     UNION ALL SELECT id::text, 'report', title FROM risk_reports WHERE company_id = $1 AND id = ANY($2::uuid[])
      UNION ALL SELECT id::text, 'scoring_policy', 'Scoring policy v' || version FROM scoring_policies WHERE company_id = $1 AND id = ANY($2::uuid[])`,
     [companyId, ids]
   );
