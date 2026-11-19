@@ -123,6 +123,19 @@ export default function GroupsPage() {
   const [grouping, setGrouping] = useState(false);
   const [showHow, setShowHow] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+
+  // AI grouping can be switched off in Settings › AI; the button is hidden then
+  const [aiOn, setAiOn] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings/ai/features")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((f) => !cancelled && setAiOn(!!f?.grouping))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [newLabel, setNewLabel] = useState("");
   const [drawer, setDrawer] = useState<{ id: string; tab: DrawerTab } | null>(null);
   const [openAlert, setOpenAlert] = useState<string | null>(null);
@@ -543,6 +556,7 @@ export default function GroupsPage() {
             >
               {grouping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Run automatic grouping
             </button>
+            {aiOn && (
             <button
               onClick={() => setAiOpen(true)}
               className="inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20"
@@ -550,6 +564,7 @@ export default function GroupsPage() {
             >
               <Sparkles className="h-4 w-4" /> AI grouping
             </button>
+            )}
             <button onClick={() => openCreate(null)} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700">
               <Plus className="h-4 w-4" /> New group
             </button>

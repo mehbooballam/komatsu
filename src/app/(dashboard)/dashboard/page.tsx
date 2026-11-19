@@ -12,7 +12,7 @@ import { AlertDrawer } from "@/components/alerts/alert-drawer";
 import { useSessionInfo } from "@/components/layout/session-context";
 import { ALERT_DELETE_ENABLED, canMakeChanges } from "@/lib/auth/permissions";
 import {
-  AlertTriangle, Clock, FileWarning, Layers, Loader2, Upload, ArrowRight,
+  AlertTriangle, Clock, FileWarning, Layers, Loader2, Upload, ArrowRight, ArrowUpRight,
   Globe2, TrendingUp, RefreshCw, CalendarDays, Flame, ListChecks, CheckCircle2,
   ChevronRight, UserPlus, Tag, Info, Eye,
 } from "lucide-react";
@@ -348,7 +348,8 @@ function KpiCard({
         </span>
       </div>
       {children && <div className="mt-4">{children}</div>}
-      <ArrowRight className="absolute bottom-4 right-4 h-4 w-4 text-slate-300 opacity-0 transition-opacity group-hover:opacity-100" />
+      {/* Top corner, above the icon; tilted to point out of the card */}
+      <ArrowUpRight className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-slate-400 opacity-0 transition-all duration-200 group-hover:-translate-y-px group-hover:translate-x-px group-hover:opacity-100 dark:text-slate-500" />
     </button>
   );
 }

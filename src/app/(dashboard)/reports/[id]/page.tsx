@@ -33,6 +33,19 @@ export default function ReportPage() {
   const [editing, setEditing] = useState<SectionKey | null>(null);
   const [draft, setDraft] = useState<ReportContent | null>(null);
 
+  // AI report writing can be switched off in Settings › AI; the button is hidden then
+  const [aiOn, setAiOn] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings/ai/features")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((f) => !cancelled && setAiOn(!!f?.reports))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/reports/${id}`)
@@ -200,7 +213,7 @@ export default function ReportPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {editable && (
+            {editable && aiOn && (
               <button
                 className="inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300"
                 onClick={() => run("ai", { action: "write_with_ai" }, "Report written with AI from the latest alert data. Sections you edited were kept.")}
@@ -245,7 +258,9 @@ export default function ReportPage() {
           <p className="text-xs text-[var(--muted-foreground)]">
             {report.content.ai_written_at
               ? <>Written with AI ({report.content.ai_model}) on {new Date(report.content.ai_written_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} from the alert register. Sections marked AI keep their text when the figures refresh; use <PencilLine className="inline h-3 w-3" /> to change one.</>
-              : <>Written automatically from the alert register. Use <strong>Write with AI</strong> for a fuller narrative, or the <PencilLine className="inline h-3 w-3" /> on any section to change it.</>}
+              : aiOn
+                ? <>Written automatically from the alert register. Use <strong>Write with AI</strong> for a fuller narrative, or the <PencilLine className="inline h-3 w-3" /> on any section to change it.</>
+                : <>Written automatically from the alert register. Use the <PencilLine className="inline h-3 w-3" /> on any section to change it.</>}
           </p>
         )}
 

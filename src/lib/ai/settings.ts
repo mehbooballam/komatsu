@@ -8,7 +8,10 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AfterImport = "off" | "review" | "apply";
 
 export interface AiSettings {
+  /** AI grouping switched on */
   enabled: boolean;
+  /** Writing the monthly report with AI switched on */
+  reports_enabled: boolean;
   provider: Provider;
   model: string | null;
   base_url: string | null;
@@ -43,6 +46,7 @@ export async function loadAiSettings(companyId: string): Promise<AiSettings> {
   const r = res.rows[0];
   return {
     enabled: !!r?.enabled,
+    reports_enabled: r ? r.reports_enabled !== false : true,
     provider: (r?.provider as Provider) ?? "anthropic",
     model: r?.model ?? null,
     base_url: r?.base_url ?? null,
@@ -61,6 +65,12 @@ export async function loadAiSettings(companyId: string): Promise<AiSettings> {
     updated_at: r?.updated_at ?? null,
     updated_by_name: r?.updated_by_name ?? null,
   };
+}
+
+/** Which AI features can be used right now (switched on, with a key and a model). */
+export function aiFeatures(s: AiSettings): { grouping: boolean; reports: boolean } {
+  const connected = s.has_key && !!s.model;
+  return { grouping: s.enabled && connected, reports: s.reports_enabled && connected };
 }
 
 /** The stored API key, decrypted (server only). */

@@ -73,6 +73,7 @@ export async function PUT(request: NextRequest) {
     reportPrompt = body.report_prompt.slice(0, 40000);
   } else reportPrompt = null;
   const enabled = typeof body.enabled === "boolean" ? body.enabled : before.enabled;
+  const reportsEnabled = typeof body.reports_enabled === "boolean" ? body.reports_enabled : before.reports_enabled;
   const readPages = typeof body.read_source_pages === "boolean" ? body.read_source_pages : before.read_source_pages;
   const themeFallback = typeof body.theme_fallback === "boolean" ? body.theme_fallback : before.theme_fallback;
 
@@ -82,9 +83,11 @@ export async function PUT(request: NextRequest) {
   const willHaveKey = newKey ? true : removeKey ? false : before.has_key;
   if (enabled && !willHaveKey) return NextResponse.json({ error: "Add an API key before turning AI grouping on" }, { status: 400 });
   if (enabled && !model) return NextResponse.json({ error: "Choose a model before turning AI grouping on" }, { status: 400 });
+  if (reportsEnabled && !before.reports_enabled && !willHaveKey) return NextResponse.json({ error: "Add an API key before turning AI report writing on" }, { status: 400 });
+  if (reportsEnabled && !before.reports_enabled && !model) return NextResponse.json({ error: "Choose a model before turning AI report writing on" }, { status: 400 });
 
   await query(`INSERT INTO ai_settings (company_id) VALUES ($1) ON CONFLICT (company_id) DO NOTHING`, [auth.company_id]);
-  const params: unknown[] = [auth.company_id, enabled, provider, model, baseUrl, effort, prompt, readPages, afterImport, autoAccept, minConf, auth.membership_id, themeFallback, reportPrompt];
+  const params: unknown[] = [auth.company_id, enabled, provider, model, baseUrl, effort, prompt, readPages, afterImport, autoAccept, minConf, auth.membership_id, themeFallback, reportPrompt, reportsEnabled];
   let keySql = "";
   if (newKey) {
     params.push(encryptSecret(newKey), newKey.slice(-4));
@@ -95,13 +98,13 @@ export async function PUT(request: NextRequest) {
   await query(
     `UPDATE ai_settings SET enabled = $2, provider = $3, model = $4, base_url = $5, effort = $6, grouping_prompt = $7,
             read_source_pages = $8, after_import = $9, auto_accept_confidence = $10, min_confidence = $11,
-            updated_by = $12, theme_fallback = $13, report_prompt = $14, updated_at = now()${keySql}
+            updated_by = $12, theme_fallback = $13, report_prompt = $14, reports_enabled = $15, updated_at = now()${keySql}
      WHERE company_id = $1`,
     params
   );
 
   const after = await loadAiSettings(auth.company_id);
-  const keys = ["enabled", "provider", "model", "base_url", "effort", "read_source_pages", "after_import", "auto_accept_confidence", "min_confidence", "theme_fallback"] as const;
+  const keys = ["enabled", "reports_enabled", "provider", "model", "base_url", "effort", "read_source_pages", "after_import", "auto_accept_confidence", "min_confidence", "theme_fallback"] as const;
   const changed: Record<string, unknown> = Object.fromEntries(keys.filter((k) => before[k] !== after[k]).map((k) => [k, after[k]]));
   if (before.grouping_prompt !== after.grouping_prompt) changed.grouping_prompt = after.prompt_is_default ? "reset to default" : "edited";
   if (before.report_prompt !== after.report_prompt) changed.report_prompt = after.report_prompt_is_default ? "reset to default" : "edited";

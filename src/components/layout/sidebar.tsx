@@ -243,7 +243,7 @@ function RiskOrbitBrand({ href, compact = false, onClick }: { href: string; comp
   return (
     <Link
       href={href}
-      aria-label="RiskOrbit by Infogenic — home"
+      aria-label="RiskOrbit by Infogenic Solutions — home"
       className={cn("flex h-11 w-fit items-center", compact && "w-10 justify-center")}
       onClick={onClick}
     >
@@ -253,8 +253,9 @@ function RiskOrbitBrand({ href, compact = false, onClick }: { href: string; comp
         <span className="block w-fit">
           <img src="/brand/riskorbit-logo.png" alt="" className="h-7 w-auto dark:hidden" />
           <img src="/brand/riskorbit-logo-dark.png" alt="" className="hidden h-7 w-auto dark:block" />
-          <span className="mt-0.5 block whitespace-nowrap text-right text-[10.5px] font-medium tracking-wide text-[var(--sidebar-muted)]">
-            by <span className="font-semibold text-[var(--sidebar-gold)]">Infogenic</span>
+          {/* Starts under the wordmark ("Risk Orbit"), clear of the orbit mark */}
+          <span className="mt-1 block whitespace-nowrap pl-[35px] text-[9.5px] font-medium leading-none text-[var(--sidebar-muted)]">
+            by <span className="font-semibold text-[var(--sidebar-gold)]">Infogenic Solutions</span>
           </span>
         </span>
       )}

@@ -6,6 +6,7 @@ import { CLAUDE_MODELS, PROVIDER_INFO, type Provider } from "@/lib/ai/provider-i
 
 interface Settings {
   enabled: boolean;
+  reports_enabled: boolean;
   provider: Provider;
   model: string | null;
   base_url: string | null;
@@ -39,6 +40,31 @@ const AFTER_IMPORT = [
 ] as const;
 
 const field = "h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900";
+
+function FeatureSwitch({ label, on, disabled, onChange, onText, offText }: { label: string; on: boolean; disabled: boolean; onChange: (v: boolean) => void; onText: string; offText: string }) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0">
+      <div className="min-w-0 text-sm">
+        <p className="font-medium text-slate-900 dark:text-white">{label}</p>
+        <p className={`mt-0.5 ${on ? "text-emerald-700 dark:text-emerald-300" : "text-[var(--muted-foreground)]"}`}>
+          {on && <Check className="mr-1 inline h-3.5 w-3.5" />}
+          {on ? onText : offText}
+        </p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        disabled={disabled}
+        onClick={() => onChange(!on)}
+        className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${on ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"}`}
+      >
+        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
+      </button>
+    </div>
+  );
+}
 
 function Card({ title, subtitle, icon: Icon, children, action }: { title: string; subtitle?: string; icon: React.ElementType; children: React.ReactNode; action?: React.ReactNode }) {
   return (
@@ -181,6 +207,7 @@ export function AiGroupingSettings({ canEdit }: { canEdit: boolean }) {
     try {
       const body: Record<string, unknown> = {
         enabled: draft.enabled,
+        reports_enabled: draft.reports_enabled,
         provider: draft.provider,
         model: draft.model,
         base_url: draft.base_url,
@@ -203,7 +230,7 @@ export function AiGroupingSettings({ canEdit }: { canEdit: boolean }) {
       setNewKey("");
       setReplacingKey(false);
       setRemoveKey(false);
-      setFlash({ ok: true, text: "AI grouping settings saved" });
+      setFlash({ ok: true, text: "AI settings saved" });
     } catch (e) {
       setFlash({ ok: false, text: e instanceof Error ? e.message : "Could not save" });
     } finally {
@@ -227,40 +254,36 @@ export function AiGroupingSettings({ canEdit }: { canEdit: boolean }) {
 
   return (
     <div className="space-y-6">
-      {/* Status */}
+      {/* Status: one switch per AI feature */}
       <Card
-        title="AI grouping"
-        subtitle="Use a language model to review every alert and its source link, and group alerts by regulation"
+        title="AI features"
+        subtitle="Switch each AI feature on or off. When a feature is off, its buttons are hidden on the Groups and Monthly Reports pages."
         icon={Sparkles}
         action={saveBar}
       >
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-slate-600 dark:text-slate-300">
-            {draft.enabled ? (
-              <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-300"><Check className="h-4 w-4" /> On — {provider.label}{draft.model ? ` · ${draft.model}` : ""}</span>
-            ) : (
-              <span>Off. The built-in rules (identifiers, CFR part, similar subject) still group alerts after each import.</span>
-            )}
-            {saved.updated_at && (
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                Last changed {new Date(saved.updated_at).toLocaleString()}{saved.updated_by_name ? ` by ${saved.updated_by_name}` : ""}
-              </p>
-            )}
-          </div>
-          <label className="inline-flex items-center gap-3 text-sm font-medium">
-            Use AI grouping
-            <button
-              type="button"
-              role="switch"
-              aria-checked={draft.enabled}
-              disabled={!canEdit}
-              onClick={() => set("enabled", !draft.enabled)}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${draft.enabled ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"}`}
-            >
-              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${draft.enabled ? "left-[22px]" : "left-0.5"}`} />
-            </button>
-          </label>
+        <div className="divide-y divide-slate-100 dark:divide-slate-800">
+          <FeatureSwitch
+            label="AI grouping"
+            on={draft.enabled}
+            disabled={!canEdit}
+            onChange={(v) => set("enabled", v)}
+            onText={`On — ${provider.label}${draft.model ? ` · ${draft.model}` : ""}. The AI grouping button shows on the Groups page.`}
+            offText="Off. The AI grouping button is hidden and nothing runs after imports. The built-in rules (identifiers, CFR part, similar subject) still group alerts."
+          />
+          <FeatureSwitch
+            label="AI report writing"
+            on={draft.reports_enabled}
+            disabled={!canEdit}
+            onChange={(v) => set("reports_enabled", v)}
+            onText={`On — ${provider.label}${draft.model ? ` · ${draft.model}` : ""}. Monthly reports show Write with AI.`}
+            offText="Off. Write with AI is hidden; reports are still written automatically by the built-in rules."
+          />
         </div>
+        {saved.updated_at && (
+          <p className="mt-3 text-xs text-[var(--muted-foreground)]">
+            Last changed {new Date(saved.updated_at).toLocaleString()}{saved.updated_by_name ? ` by ${saved.updated_by_name}` : ""}
+          </p>
+        )}
       </Card>
 
       {/* Connection */}

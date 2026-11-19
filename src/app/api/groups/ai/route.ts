@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit } from "@/lib/auth-helpers";
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
-import { loadAiSettings } from "@/lib/ai/settings";
+import { aiFeatures, loadAiSettings } from "@/lib/ai/settings";
 import { ProviderError } from "@/lib/ai/providers";
 import { startAiGrouping } from "@/lib/grouping/ai";
 import { PROVIDER_INFO } from "@/lib/ai/provider-info";
@@ -29,7 +29,7 @@ export async function GET() {
     [auth.company_id]
   );
   return NextResponse.json({
-    ready: s.enabled && s.has_key && !!s.model,
+    ready: aiFeatures(s).grouping,
     enabled: s.enabled,
     provider: PROVIDER_INFO[s.provider].label,
     model: s.model,

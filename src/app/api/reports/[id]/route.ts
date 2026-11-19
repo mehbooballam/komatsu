@@ -6,6 +6,7 @@ import { UUID_RE } from "@/lib/inventory";
 import { canEditReports, sanitizeContent, SECTION_KEYS, type SectionKey } from "@/lib/reports";
 import { AUTO_REFRESH_MINUTES, captureSnapshot, loadHistory, previousSnapshot, refreshReport, REPORT_JOINS, REPORT_SELECT } from "@/lib/reports-server";
 import { writeReportWithAI } from "@/lib/reports-ai";
+import { aiFeatures, loadAiSettings } from "@/lib/ai/settings";
 import { ProviderError } from "@/lib/ai/providers";
 
 // Writing the report with AI can take a minute or more
@@ -95,6 +96,9 @@ export async function PATCH(request: NextRequest, { params }: Ctx) {
     await createAuditEvent(auth.company_id, auth.membership_id, publish ? "report_published" : "report_unpublished",
       "risk_report", id, { status: before.status }, { status: publish ? "published" : "draft", title: before.title });
   } else if (action === "write_with_ai") {
+    if (!aiFeatures(await loadAiSettings(auth.company_id)).reports) {
+      return NextResponse.json({ error: "Writing reports with AI is turned off in Settings › AI" }, { status: 403 });
+    }
     if (before.status === "published") {
       return NextResponse.json({ error: "Move the report back to draft before rewriting it" }, { status: 400 });
     }
