@@ -371,8 +371,9 @@ function BandBar({ byBand, total }: { byBand: Record<Band, number>; total: numbe
 function PriorityDonut({ byBand, total, onSelect }: { byBand: Record<Band, number>; total: number; onSelect: (b: Band) => void }) {
   const data = BAND_ORDER.map((b) => ({ band: b, name: BAND_LABELS[b], value: byBand[b] })).filter((d) => d.value > 0);
   return (
-    <div className="flex flex-col items-center gap-5 sm:flex-row xl:flex-col 2xl:flex-row">
-      <div className="relative h-44 w-44 shrink-0">
+    <div className="@container">
+    <div className="flex flex-col items-center gap-4 @[26rem]:flex-row @[26rem]:gap-6">
+      <div className="relative h-40 w-40 shrink-0">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -381,6 +382,7 @@ function PriorityDonut({ byBand, total, onSelect }: { byBand: Record<Band, numbe
               innerRadius="68%"
               outerRadius="100%"
               paddingAngle={data.length > 1 ? 2 : 0}
+              minAngle={data.length > 1 ? 4 : 0}
               stroke="none"
               startAngle={90}
               endAngle={-270}
@@ -407,7 +409,7 @@ function PriorityDonut({ byBand, total, onSelect }: { byBand: Record<Band, numbe
           <span className="text-[11px] uppercase tracking-wide text-[var(--muted-foreground)]">alerts</span>
         </div>
       </div>
-      <ul className="w-full space-y-1.5">
+      <ul className="w-full min-w-0 space-y-0.5">
         {BAND_ORDER.filter((b) => b !== "unscored" || byBand.unscored > 0).map((b) => {
           const pct = total ? Math.round((byBand[b] / total) * 100) : 0;
           return (
@@ -415,17 +417,18 @@ function PriorityDonut({ byBand, total, onSelect }: { byBand: Record<Band, numbe
               <button
                 type="button"
                 onClick={() => onSelect(b)}
-                className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800/60"
               >
-                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: BAND_COLORS[b] }} />
-                <span className="flex-1 text-left text-slate-700 dark:text-slate-300">{BAND_LABELS[b]}</span>
-                <span className="font-semibold tabular-nums text-slate-900 dark:text-white">{byBand[b]}</span>
-                <span className="w-10 text-right text-xs tabular-nums text-[var(--muted-foreground)]">{pct}%</span>
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: BAND_COLORS[b] }} />
+                <span className="min-w-0 flex-1 truncate text-left text-slate-700 dark:text-slate-300">{BAND_LABELS[b]}</span>
+                <span className="shrink-0 text-right font-semibold tabular-nums text-slate-900 dark:text-white">{byBand[b]}</span>
+                <span className="w-9 shrink-0 text-right text-xs tabular-nums text-[var(--muted-foreground)]">{pct}%</span>
               </button>
             </li>
           );
         })}
       </ul>
+    </div>
     </div>
   );
 }
