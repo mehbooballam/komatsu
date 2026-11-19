@@ -660,6 +660,7 @@ export function AlertsTable({
                 </th>
               )}
               <SortHead {...sortProps} col="title" className={selectable ? "" : "rounded-tl-xl"}>Alert</SortHead>
+              <SortHead {...sortProps} col="stage">Stage</SortHead>
               {!compact && <SortHead {...sortProps}>Geography</SortHead>}
               <SortHead {...sortProps} col="deadline">Deadline</SortHead>
               <SortHead {...sortProps} col="score">Score · band</SortHead>
@@ -672,7 +673,7 @@ export function AlertsTable({
             {loading
               ? Array.from({ length: compact ? 5 : 8 }).map((_, i) => (
                   <tr key={i}>
-                    <td colSpan={8} className="border-t border-slate-100 px-4 py-4 dark:border-slate-800">
+                    <td colSpan={9} className="border-t border-slate-100 px-4 py-4 dark:border-slate-800">
                       <div className="h-4 w-full animate-pulse rounded bg-slate-100 dark:bg-slate-800" />
                     </td>
                   </tr>
@@ -680,7 +681,7 @@ export function AlertsTable({
               : alerts.length === 0
               ? (
                 <tr>
-                  <td colSpan={8} className="border-t border-slate-100 px-4 py-14 text-center text-sm text-slate-500 dark:border-slate-800">
+                  <td colSpan={9} className="border-t border-slate-100 px-4 py-14 text-center text-sm text-slate-500 dark:border-slate-800">
                     {emptyMessage || "No alerts match these filters."}
                   </td>
                 </tr>
@@ -729,9 +730,11 @@ export function AlertsTable({
                                 onClick={onGroupClick ? () => onGroupClick(a.group_id!) : undefined}
                               />
                             )}
-                            <StageBadge stage={a.stage} />
                           </div>
                         </div>
+                      </td>
+                      <td className="border-t border-slate-100 px-4 py-3 dark:border-slate-800">
+                        {a.stage ? <StageBadge stage={a.stage} /> : <span className="text-xs text-slate-400">—</span>}
                       </td>
                       {!compact && (
                         <td className="border-t border-slate-100 px-4 py-3 dark:border-slate-800">

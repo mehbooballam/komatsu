@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuth, createAuditEvent } from "@/lib/auth-helpers";
 import { deleteAlerts } from "@/lib/alerts/delete";
+import { ALERT_DELETE_ENABLED } from "@/lib/auth/permissions";
 
 /**
  * POST /api/alerts/delete
@@ -10,6 +11,7 @@ import { deleteAlerts } from "@/lib/alerts/delete";
 export async function POST(request: NextRequest) {
   const auth = await getAuth();
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!ALERT_DELETE_ENABLED) return NextResponse.json({ error: "Deleting alerts is turned off" }, { status: 403 });
 
   const body = await request.json().catch(() => ({}));
   const { ids, all, confirm, include_imports } = body as {

@@ -10,7 +10,7 @@ import { RiskHeatmap, heatmapFocus, type HeatmapData, type HeatmapView } from "@
 import { AlertsTable, type AlertRow } from "@/components/alerts/alerts-table";
 import { AlertDrawer } from "@/components/alerts/alert-drawer";
 import { useSessionInfo } from "@/components/layout/session-context";
-import { canMakeChanges } from "@/lib/auth/permissions";
+import { ALERT_DELETE_ENABLED, canMakeChanges } from "@/lib/auth/permissions";
 import {
   AlertTriangle, Clock, FileWarning, Layers, Loader2, Upload, ArrowRight,
   Globe2, TrendingUp, RefreshCw, CalendarDays, Flame, ListChecks, CheckCircle2,
@@ -515,7 +515,7 @@ export default function DashboardPage() {
   const session = useSessionInfo();
   // Reviewers and risk owners can only look
   const canEdit = canMakeChanges(session?.membership.role);
-  const canDelete = session?.membership.role === "company_admin" || session?.membership.role === "manager";
+  const canDelete = ALERT_DELETE_ENABLED && (session?.membership.role === "company_admin" || session?.membership.role === "manager");
 
   // Loading/error belong to a specific reloadKey, so starting a reload needs no setState
   const loading = loaded?.key !== reloadKey;

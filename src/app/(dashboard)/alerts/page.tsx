@@ -9,7 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { AlertDrawer } from "@/components/alerts/alert-drawer";
 import { AlertsTable, type AlertRow, createGroup, MAX_GROUP_DEPTH } from "@/components/alerts/alerts-table";
 import { useSessionInfo } from "@/components/layout/session-context";
-import { canMakeChanges, hasCompanyWideAccess } from "@/lib/auth/permissions";
+import { ALERT_DELETE_ENABLED, canMakeChanges, hasCompanyWideAccess } from "@/lib/auth/permissions";
 
 interface Option { value: string; label: string; count?: number }
 interface GroupOption extends Option { parent: string | null; depth: number; path: string[] }
@@ -308,7 +308,7 @@ export default function AlertsPage() {
   const canEdit = canMakeChanges(role);
   const workspaceWide = hasCompanyWideAccess(role ?? "", session?.membership.access_scope ?? "");
   const isAdmin = role === "company_admin";
-  const canDelete = role === "company_admin" || role === "manager";
+  const canDelete = ALERT_DELETE_ENABLED && (role === "company_admin" || role === "manager");
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
   const [alsoImports, setAlsoImports] = useState(true);
 
@@ -406,7 +406,7 @@ export default function AlertsPage() {
     if (sortBy === col) setSortDir(sortDir === "asc" ? "desc" : "asc");
     else {
       setSortBy(col);
-      setSortDir(col === "title" ? "asc" : "desc");
+      setSortDir(col === "title" || col === "stage" ? "asc" : "desc");
     }
   }
 
@@ -442,7 +442,7 @@ export default function AlertsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 self-start">
-          {isAdmin && (allCount ?? 0) > 0 && (
+          {ALERT_DELETE_ENABLED && isAdmin && (allCount ?? 0) > 0 && (
             <button
               onClick={() => setDeleteAllOpen(true)}
               className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-500/30 dark:bg-transparent dark:hover:bg-red-500/10"

@@ -2,6 +2,12 @@ import type { AuthMembership } from "./middleware";
 
 type Role = AuthMembership["role"];
 
+/**
+ * Deleting alerts (one, selected, or all) is switched off: the buttons are hidden and the
+ * server refuses. Set to true to bring it back.
+ */
+export const ALERT_DELETE_ENABLED = false;
+
 /** Roles that may change alerts, groups and products. Reviewers and risk owners are read-only. */
 const EDITING_ROLES: Role[] = ["company_admin", "manager"];
 const IMPORT_ROLES: Role[] = ["company_admin", "manager"];

@@ -200,6 +200,21 @@ export async function GET(request: NextRequest) {
     case "title":
       orderClause = `a.title ${sortDir}`;
       break;
+    case "stage":
+      // Regulatory lifecycle order: signal → draft → consultation → final mandatory → final voluntary → other
+      orderClause = `
+        CASE
+          WHEN a.stage IS NULL OR a.stage = '' THEN NULL
+          WHEN a.stage ~* 'signal|information|notice' THEN 1
+          WHEN a.stage ~* 'draft|propos' THEN 2
+          WHEN a.stage ~* 'consult|comment' THEN 3
+          WHEN a.stage ~* 'voluntary|guid' THEN 5
+          WHEN a.stage ~* 'final|mandatory|adopted|enacted|in force|effective' THEN 4
+          ELSE 6
+        END ${sortDir} NULLS LAST,
+        a.stage ${sortDir},
+        a.title ASC`;
+      break;
     case "priority":
     default:
       orderClause = `

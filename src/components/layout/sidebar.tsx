@@ -32,7 +32,7 @@ interface SidebarProps {
 }
 
 /** Monthly Reports menu entry — switch to true to show it in the sidebar. */
-const SHOW_REPORTS_MENU = false;
+const SHOW_REPORTS_MENU = true;
 
 type NavItem = { label: string; href: string; icon: React.ElementType; roles: string[] };
 
