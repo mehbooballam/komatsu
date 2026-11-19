@@ -98,7 +98,7 @@ export async function DELETE(
   await query(`DELETE FROM import_rows WHERE batch_id = $1`, [id]);
   await query(`DELETE FROM import_batches WHERE id = $1 AND company_id = $2`, [id, auth.company_id]);
   if (batch.object_key) {
-    const uploadDir = path.resolve(process.env.UPLOAD_DIR || "./uploads");
+    const uploadDir = path.resolve(process.env.UPLOAD_DIR || (process.env.VERCEL ? "/tmp/uploads" : "./uploads"));
     const filePath = path.resolve(uploadDir, batch.object_key);
     if (filePath.startsWith(uploadDir + path.sep)) await unlink(filePath).catch(() => {});
   }

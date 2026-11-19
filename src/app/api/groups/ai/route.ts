@@ -7,6 +7,9 @@ import { ProviderError } from "@/lib/ai/providers";
 import { startAiGrouping } from "@/lib/grouping/ai";
 import { PROVIDER_INFO } from "@/lib/ai/provider-info";
 
+// Imports and AI grouping runs (which continue after the response) can take minutes
+export const maxDuration = 300;
+
 /** GET — whether AI grouping is ready, and the latest runs. */
 export async function GET() {
   const auth = await getAuth();

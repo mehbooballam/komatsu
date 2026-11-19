@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
   const buffer = Buffer.from(await file.arrayBuffer());
   const digest = crypto.createHash("sha256").update(buffer).digest("hex");
 
-  const uploadDir = process.env.UPLOAD_DIR || "./uploads";
+  const uploadDir = process.env.UPLOAD_DIR || (process.env.VERCEL ? "/tmp/uploads" : "./uploads");
   const uploadId = crypto.randomUUID();
   const objectKey = `${auth.company_id}/${uploadId}${ext}`;
   const filePath = path.join(uploadDir, objectKey);

@@ -5,6 +5,9 @@ import { processImportBatch } from "@/lib/import/processor";
 import { validateRows, type ValidatedRow } from "@/lib/import/validator";
 import { mappingProblems, rowsFromRaw, type ColumnMapping } from "@/lib/import/mapping";
 
+// Imports and AI grouping runs (which continue after the response) can take minutes
+export const maxDuration = 300;
+
 export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

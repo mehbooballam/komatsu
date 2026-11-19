@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { query } from "@/lib/db";
 import { loadAiSettings, loadApiKey, type AiSettings } from "@/lib/ai/settings";
 import { completeJson, ProviderError, type ProviderConfig } from "@/lib/ai/providers";
@@ -336,14 +337,17 @@ export async function startAiGrouping(
     [companyId, opts.mode, opts.scope, opts.trigger, cfg.provider, cfg.model, opts.membershipId, JSON.stringify({ step: "starting" })]
   );
   const runId: string = ins.rows[0].id;
-  // Not awaited: the run continues after the request returns (long-running Node server)
-  void executeRun(runId, companyId, settings, cfg, opts).catch(async (err) => {
-    console.error("AI grouping run failed:", err);
-    await query(
-      `UPDATE ai_grouping_runs SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`,
-      [runId, err instanceof Error ? err.message.slice(0, 1000) : "AI grouping failed"]
-    ).catch(() => {});
-  });
+  // Runs after the response is sent; the platform keeps the function alive for the
+  // route's maxDuration (on Vercel), or as long as needed on a Node server
+  after(() =>
+    executeRun(runId, companyId, settings, cfg, opts).catch(async (err) => {
+      console.error("AI grouping run failed:", err);
+      await query(
+        `UPDATE ai_grouping_runs SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`,
+        [runId, err instanceof Error ? err.message.slice(0, 1000) : "AI grouping failed"]
+      ).catch(() => {});
+    })
+  );
   return { runId };
 }
 
