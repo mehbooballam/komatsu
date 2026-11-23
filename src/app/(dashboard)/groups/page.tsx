@@ -104,6 +104,11 @@ export default function GroupsPage() {
   const [alerts, setAlerts] = useState<GroupAlert[]>([]);
   const [labels, setLabels] = useState<GroupLabel[]>([]);
   const [review, setReview] = useState<ReviewItem[]>([]);
+  // Suggested groupings selected for a bulk confirm / reject
+  const [reviewSel, setReviewSel] = useState<Set<string>>(new Set());
+  const [deciding, setDeciding] = useState(false);
+  // Selected items that are still waiting for review (the list reloads after each decision)
+  const reviewChosen = review.filter((i) => reviewSel.has(i.id));
   const [loading, setLoading] = useState(true);
   const { members } = useAssignables(canAssign);
 
@@ -513,18 +518,38 @@ export default function GroupsPage() {
     }
   }
 
-  async function decide(alertId: string, title: string, path: string, decision: "confirm" | "reject") {
+  /** Confirm or reject one or more suggested groupings (one comment covers them all). */
+  async function decide(items: ReviewItem[], decision: "confirm" | "reject") {
+    if (!items.length) return;
+    const one = items.length === 1 ? items[0] : null;
+    const path = one ? one.group_path.join(" › ") : "";
     const comment = await askChangeComment({
-      action: decision === "confirm" ? `Confirm grouping into ${path}` : `Reject grouping — remove from ${path}`,
-      detail: title,
+      action: one
+        ? decision === "confirm" ? `Confirm grouping into ${path}` : `Reject grouping — remove from ${path}`
+        : decision === "confirm" ? `Confirm ${items.length} suggested groupings` : `Reject ${items.length} suggested groupings — remove them from their groups`,
+      detail: one ? one.title : items.slice(0, 3).map((i) => i.title).join(" · ") + (items.length > 3 ? ` · and ${items.length - 3} more` : ""),
+      // Rejecting a suggested grouping doesn't need a reason
+      optional: decision === "reject",
+      confirmLabel: decision === "reject" ? (one ? "Reject" : `Reject ${items.length}`) : one ? undefined : `Confirm ${items.length}`,
     });
-    if (!comment) return;
-    const res = await fetch("/api/groups/review", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ alert_id: alertId, decision, comment }),
-    });
-    setFlash(res.ok ? { ok: true, text: decision === "confirm" ? "Grouping confirmed" : "Removed from the group" } : { ok: false, text: "Could not save the decision" });
+    if (comment === null || (decision === "confirm" && !comment)) return;
+    setDeciding(true);
+    try {
+      const res = await fetch("/api/groups/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alert_ids: items.map((i) => i.id), decision, comment }),
+      });
+      const n = res.ok ? ((await res.json()).count as number) ?? items.length : 0;
+      setFlash(
+        res.ok
+          ? { ok: true, text: decision === "confirm" ? `${n === 1 ? "Grouping" : `${n} groupings`} confirmed` : `${n === 1 ? "Alert" : `${n} alerts`} removed from ${n === 1 ? "the group" : "their groups"}` }
+          : { ok: false, text: "Could not save the decision" }
+      );
+      if (res.ok) setReviewSel((s) => { const next = new Set(s); items.forEach((i) => next.delete(i.id)); return next; });
+    } finally {
+      setDeciding(false);
+    }
     await Promise.all([load(), loadReview()]);
   }
 
@@ -597,14 +622,66 @@ export default function GroupsPage() {
 
       {review.length > 0 && (
         <section className="panel overflow-hidden">
-          <header className="flex items-center gap-2 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+          <header className="flex min-h-[52px] flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-slate-800">
+            {canEdit && (
+              <input
+                type="checkbox"
+                aria-label="Select all suggested groupings"
+                checked={reviewChosen.length > 0 && reviewChosen.length === review.length}
+                ref={(el) => {
+                  if (el) el.indeterminate = reviewChosen.length > 0 && reviewChosen.length < review.length;
+                }}
+                onChange={(e) => setReviewSel(e.target.checked ? new Set(review.map((i) => i.id)) : new Set())}
+                className="h-4 w-4 rounded border-slate-300 accent-[var(--primary)]"
+              />
+            )}
             <AlertTriangle className="h-4 w-4 text-amber-500" />
             <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Grouped by similar subject — confirm or reject</h2>
             <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">{review.length}</span>
+            {canEdit && reviewChosen.length > 0 && (
+              <div className="ml-auto flex items-center gap-1.5">
+                <span className="mr-1 text-xs font-medium text-slate-600 dark:text-slate-300">{reviewChosen.length} selected</span>
+                <button
+                  type="button"
+                  disabled={deciding}
+                  onClick={() => decide(reviewChosen, "confirm")}
+                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Confirm {reviewChosen.length}
+                </button>
+                <button
+                  type="button"
+                  disabled={deciding}
+                  onClick={() => decide(reviewChosen, "reject")}
+                  className="inline-flex items-center gap-1 rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  <X className="h-3.5 w-3.5" /> Reject {reviewChosen.length}
+                </button>
+                <button type="button" onClick={() => setReviewSel(new Set())} className="rounded-lg px-2 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                  Clear
+                </button>
+              </div>
+            )}
           </header>
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
             {review.map((item) => (
-              <li key={item.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center">
+              <li key={item.id} className={`flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center ${reviewSel.has(item.id) ? "bg-blue-50/50 dark:bg-blue-500/5" : ""}`}>
+                {canEdit && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${item.title}`}
+                    checked={reviewSel.has(item.id)}
+                    onChange={(e) =>
+                      setReviewSel((s) => {
+                        const next = new Set(s);
+                        if (e.target.checked) next.add(item.id);
+                        else next.delete(item.id);
+                        return next;
+                      })
+                    }
+                    className="h-4 w-4 shrink-0 rounded border-slate-300 accent-[var(--primary)]"
+                  />
+                )}
                 <button type="button" onClick={() => setOpenAlert(item.id)} className="min-w-0 flex-1 text-left">
                   <p className="truncate text-sm font-medium text-slate-900 hover:text-blue-600 dark:text-white" title={item.title}>{item.title}</p>
                   <p className="truncate text-xs text-slate-500" title={item.basis}>
@@ -613,10 +690,10 @@ export default function GroupsPage() {
                 </button>
                 {canEdit && (
                   <div className="flex shrink-0 gap-1.5">
-                    <button onClick={() => decide(item.id, item.title, item.group_path.join(" › "), "confirm")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50 dark:text-emerald-300 dark:ring-emerald-500/30 dark:hover:bg-emerald-500/10">
+                    <button disabled={deciding} onClick={() => decide([item], "confirm")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50 dark:text-emerald-300 dark:ring-emerald-500/30 dark:hover:bg-emerald-500/10">
                       <CheckCircle2 className="h-3.5 w-3.5" /> Confirm
                     </button>
-                    <button onClick={() => decide(item.id, item.title, item.group_path.join(" › "), "reject")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-red-200 hover:bg-red-50 dark:text-red-300 dark:ring-red-500/30 dark:hover:bg-red-500/10">
+                    <button disabled={deciding} onClick={() => decide([item], "reject")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-red-200 hover:bg-red-50 dark:text-red-300 dark:ring-red-500/30 dark:hover:bg-red-500/10">
                       <X className="h-3.5 w-3.5" /> Reject
                     </button>
                   </div>
@@ -1010,7 +1087,7 @@ export default function GroupsPage() {
           onSetOwner={setOwner}
           onSetLabels={setGroupLabels}
           onCreateLabel={createLabel}
-          onDecide={(a, d) => decide(a.id, a.title, drawerGroup.path.join(" › "), d)}
+          onDecide={(a, d) => decide([{ id: a.id, title: a.title, confidence: 0, basis: "", group_path: drawerGroup.path, priority: null }], d)}
           onChanged={(text) => { setFlash({ ok: true, text }); load(); }}
         />
       )}

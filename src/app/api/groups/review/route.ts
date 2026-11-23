@@ -30,49 +30,67 @@ export async function GET() {
   });
 }
 
-/** POST { alert_id, decision: "confirm" | "reject", comment } */
+/**
+ * POST { alert_ids: string[] (or alert_id), decision: "confirm" | "reject", comment }
+ * Confirms or rejects one or more suggested groupings. One comment covers them all;
+ * it is required to confirm and optional to reject.
+ */
 export async function POST(request: NextRequest) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
   if (!hasCompanyWideAccess(auth.role, auth.access_scope) || !canEdit(auth.role)) return forbidden();
 
   const body = await request.json().catch(() => ({}));
-  const alertId = typeof body.alert_id === "string" && ALERT_UUID.test(body.alert_id) ? body.alert_id : null;
-  if (!alertId || (body.decision !== "confirm" && body.decision !== "reject")) {
-    return NextResponse.json({ error: "alert_id and decision are required" }, { status: 400 });
+  const rawIds: unknown[] = Array.isArray(body.alert_ids) ? body.alert_ids : typeof body.alert_id === "string" ? [body.alert_id] : [];
+  const ids = [...new Set(rawIds.filter((v): v is string => typeof v === "string" && ALERT_UUID.test(v)))];
+  if (!ids.length || ids.length > 1000 || (body.decision !== "confirm" && body.decision !== "reject")) {
+    return NextResponse.json({ error: "alert_ids (1–1000) and decision are required" }, { status: 400 });
   }
+  const decision: "confirm" | "reject" = body.decision;
   const comment = readChangeComment(request, body);
-  if (!comment) return commentRequired();
+  if (!comment && decision !== "reject") return commentRequired();
 
+  // Only alerts still waiting for review
   const cur = await query(
-    `SELECT primary_group_id FROM alerts WHERE id = $1 AND company_id = $2 AND grouping_method IN ('similarity', 'ai') AND NOT grouping_reviewed`,
-    [alertId, auth.company_id]
+    `SELECT id, primary_group_id FROM alerts
+     WHERE id = ANY($1::uuid[]) AND company_id = $2 AND grouping_method IN ('similarity', 'ai') AND NOT grouping_reviewed`,
+    [ids, auth.company_id]
   );
-  if (!cur.rowCount) return NextResponse.json({ error: "Nothing to review for this alert" }, { status: 404 });
-  const groupId = cur.rows[0].primary_group_id;
-  const path = (await loadGroupTree(auth.company_id)).find((g) => g.id === groupId)?.path.join(" › ") ?? "its group";
+  if (!cur.rowCount) return NextResponse.json({ error: "Nothing to review for these alerts" }, { status: 404 });
+  const rows = cur.rows as Array<{ id: string; primary_group_id: string | null }>;
+  const done = rows.map((r) => r.id);
+  const paths = new Map((await loadGroupTree(auth.company_id)).map((g) => [g.id, g.path.join(" › ")]));
+  const pathOf = (gid: string | null) => (gid && paths.get(gid)) || "its group";
 
-  if (body.decision === "confirm") {
-    await query(`UPDATE alerts SET grouping_reviewed = TRUE WHERE id = $1 AND company_id = $2`, [alertId, auth.company_id]);
-    await addChangeNotes(auth.company_id, [alertId], auth.membership_id, `Automatic grouping confirmed: ${path}`, comment);
+  if (decision === "confirm") {
+    await query(`UPDATE alerts SET grouping_reviewed = TRUE WHERE id = ANY($1::uuid[]) AND company_id = $2`, [done, auth.company_id]);
   } else {
     // Rejected: out of the group, and kept out of automatic grouping
     await query(
       `UPDATE alerts SET primary_group_id = NULL, grouping_method = 'manual', grouping_confidence = NULL,
               grouping_basis = $3, grouping_reviewed = TRUE, record_version = record_version + 1
-       WHERE id = $1 AND company_id = $2`,
-      [alertId, auth.company_id, comment]
+       WHERE id = ANY($1::uuid[]) AND company_id = $2`,
+      [done, auth.company_id, comment || "Rejected by reviewer"]
     );
     await query(
       `UPDATE alert_active_projections p
        SET effective_owner_id = a.direct_owner_membership_id, updated_at = NOW()
-       FROM alerts a WHERE p.alert_id = a.id AND a.id = $1`,
-      [alertId]
+       FROM alerts a WHERE p.alert_id = a.id AND a.id = ANY($1::uuid[]) AND a.company_id = $2`,
+      [done, auth.company_id]
     );
-    await addChangeNotes(auth.company_id, [alertId], auth.membership_id, `Automatic grouping rejected: removed from ${path}`, comment);
   }
-  await createAuditEvent(auth.company_id, auth.membership_id, `grouping_${body.decision}`, "alert", alertId,
-    { group_id: groupId }, { decision: body.decision }, comment);
 
-  return NextResponse.json({ success: true });
+  // Notes and History per alert (each names its own group)
+  for (const r of rows) {
+    const path = pathOf(r.primary_group_id);
+    await addChangeNotes(
+      auth.company_id, [r.id], auth.membership_id,
+      decision === "confirm" ? `Automatic grouping confirmed: ${path}` : `Automatic grouping rejected: removed from ${path}`,
+      comment || (decision === "reject" ? "No reason given" : comment)
+    );
+    await createAuditEvent(auth.company_id, auth.membership_id, `grouping_${decision}`, "alert", r.id,
+      { group_id: r.primary_group_id }, { decision, ...(rows.length > 1 ? { bulk: rows.length } : {}) }, comment || undefined);
+  }
+
+  return NextResponse.json({ success: true, count: done.length, skipped: ids.length - done.length });
 }

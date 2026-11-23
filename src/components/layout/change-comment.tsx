@@ -16,6 +16,8 @@ export interface ChangeCommentRequest {
   /** Optional context, e.g. "3 alerts" */
   detail?: string;
   confirmLabel?: string;
+  /** The comment may be left empty (resolves with "" — only null means cancelled). */
+  optional?: boolean;
 }
 
 type Pending = ChangeCommentRequest & { resolve: (comment: string | null) => void };
@@ -25,8 +27,9 @@ export function askChangeComment(req: ChangeCommentRequest): Promise<string | nu
   return new Promise((resolve) => {
     if (!open) {
       // Host not mounted (shouldn't happen inside the app): fall back to the browser prompt
-      const c = window.prompt(`${req.action}\n\nWhy are you making this change?`);
-      resolve(c && c.trim() ? c.trim() : null);
+      const c = window.prompt(`${req.action}\n\nWhy are you making this change?${req.optional ? " (optional)" : ""}`);
+      if (c === null) resolve(null);
+      else resolve(c.trim() || (req.optional ? "" : null));
       return;
     }
     open({ ...req, resolve });
@@ -61,7 +64,7 @@ export function ChangeCommentHost() {
     pending?.resolve(value);
     setPending(null);
   };
-  const valid = text.trim().length >= MIN;
+  const valid = pending?.optional ? true : text.trim().length >= MIN;
 
   return (
     <Dialog open={!!pending} onOpenChange={(o) => !o && finish(null)}>
@@ -76,7 +79,11 @@ export function ChangeCommentHost() {
           <DialogTitle className="flex items-center gap-2">
             <MessageSquareText className="h-5 w-5 text-blue-600 dark:text-blue-400" /> Comment on this change
           </DialogTitle>
-          <DialogDescription>Your comment is saved in the alert&apos;s Notes with the action taken.</DialogDescription>
+          <DialogDescription>
+            {pending?.optional
+              ? "A reason is optional. If you add one, it is saved in the alert’s Notes with the action taken."
+              : "Your comment is saved in the alert’s Notes with the action taken."}
+          </DialogDescription>
         </DialogHeader>
         {pending && (
           <form
@@ -92,7 +99,10 @@ export function ChangeCommentHost() {
               {pending.detail && <span className="block text-xs text-slate-500">{pending.detail}</span>}
             </div>
             <label className="block">
-              <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Why? <span className="text-red-600">*</span></span>
+              <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                Why?{" "}
+                {pending.optional ? <span className="font-normal text-slate-400">(optional)</span> : <span className="text-red-600">*</span>}
+              </span>
               <textarea
                 ref={ref}
                 rows={3}

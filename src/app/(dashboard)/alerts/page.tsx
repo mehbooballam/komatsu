@@ -64,7 +64,7 @@ const DEADLINE_OPTIONS: Option[] = [
 
 const PAGE_SIZE = 25;
 
-/** Group filter: searchable dropdown, groups as a tree (sub-groups indented), plus "No group". */
+/** Group filter: searchable dropdown, groups as a tree (sub-groups indented), plus "Not grouped". */
 function GroupSelect({
   groups,
   ungroupedCount,
@@ -108,7 +108,9 @@ function GroupSelect({
   const term = q.trim().toLowerCase();
   const shown = term ? ordered.filter((g) => g.path.join(" › ").toLowerCase().includes(term)) : ordered;
   const current = value && value !== "none" ? groups.find((g) => g.value === value) : null;
-  const summary = value === "none" ? "No group" : current ? current.path.join(" › ") : null;
+  const summary = value === "none" ? "Not grouped" : current ? current.path.join(" › ") : null;
+  // "Not grouped" is always offered (also when searching for it)
+  const showUngrouped = !term || "not grouped".includes(term) || "ungrouped".includes(term) || "no group".includes(term);
   const pick = (v: string | null) => {
     onChange(v);
     setOpen(false);
@@ -160,7 +162,7 @@ function GroupSelect({
         </div>
         <div className="max-h-80 overflow-y-auto">
           {!term && row("all", "All groups", value === null, () => pick(null))}
-          {!term && (ungroupedCount ?? 0) > 0 && row("none", <span className="italic">No group</span>, value === "none", () => pick("none"), ungroupedCount)}
+          {showUngrouped && row("none", <span className="italic">Not grouped</span>, value === "none", () => pick("none"), ungroupedCount ?? 0, 0, "Alerts that are not in any group")}
           {!term && groups.length > 0 && <div role="separator" className="my-1 border-t border-slate-100 dark:border-slate-800" />}
           {shown.map((g) =>
             row(
@@ -173,7 +175,7 @@ function GroupSelect({
               g.path.join(" › ")
             )
           )}
-          {shown.length === 0 && <p className="px-2.5 py-3 text-sm text-slate-500">No group matches “{q}”.</p>}
+          {shown.length === 0 && !showUngrouped && <p className="px-2.5 py-3 text-sm text-slate-500">No group matches “{q}”.</p>}
         </div>
         {canCreate && (
           <form
