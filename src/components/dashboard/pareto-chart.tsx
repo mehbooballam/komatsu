@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  BarChart,
   Bar,
   XAxis,
   YAxis,
@@ -12,6 +11,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import { BarChart3 } from "lucide-react";
 
 interface ParetoItem {
   alert_id: string;
@@ -28,165 +28,136 @@ interface ParetoChartProps {
   totalScoredCount: number;
   displayedCount: number;
   onBarClick?: (alertId: string) => void;
+  /** Fill the parent's height (full-screen view) instead of a fixed 300px. */
+  fill?: boolean;
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
   critical: "#7c3aed",
-  high: "#c2410c",
-  moderate: "#d97706",
-  low: "#0d9488",
-  unscored: "#6b7280",
+  high: "#dc4a0c",
+  moderate: "#f59e0b",
+  low: "#14b8a6",
+  unscored: "#94a3b8",
 };
 
-function CustomTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload: ParetoItem }>;
-  label?: string;
-}) {
+const LEGEND = ["critical", "high", "moderate", "low"] as const;
+
+type Row = ParetoItem & { rank: number };
+
+function CustomTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: Row }> }) {
   if (!active || !payload?.length) return null;
   const item = payload[0].payload;
   return (
-    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg px-3 py-2 text-xs">
-      <div className="font-semibold text-gray-900 dark:text-gray-100 mb-1 max-w-[200px] truncate">
-        {item.title}
+    <div className="max-w-[260px] rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">#{item.rank}</div>
+      <div className="mb-2 line-clamp-2 font-semibold text-slate-900 dark:text-slate-100">{item.title}</div>
+      <div className="flex items-center justify-between gap-4">
+        <span className="inline-flex items-center gap-1.5 capitalize text-slate-600 dark:text-slate-300">
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: PRIORITY_COLORS[item.priority] || PRIORITY_COLORS.unscored }} />
+          {item.priority}
+        </span>
+        <span className="font-semibold tabular-nums text-slate-900 dark:text-white">Score {item.score}</span>
       </div>
-      <div className="text-gray-500 dark:text-gray-400 mb-1">{item.external_alert_id}</div>
-      <div className="flex items-center gap-1.5 mb-0.5">
-        <span
-          className="w-2 h-2 rounded-full"
-          style={{ backgroundColor: PRIORITY_COLORS[item.priority] || PRIORITY_COLORS.unscored }}
-        />
-        <span className="capitalize">{item.priority}</span>
-      </div>
-      <div>Score: {item.score}</div>
-      <div>Cumulative: {item.cumulative_pct}%</div>
+      <div className="mt-1 text-slate-500">Cumulative: {item.cumulative_pct}% of total risk</div>
+      <div className="mt-1.5 text-[10px] text-blue-600">Click to open</div>
     </div>
   );
 }
 
-export function ParetoChart({
-  data,
-  totalSum,
-  totalScoredCount,
-  displayedCount,
-  onBarClick,
-}: ParetoChartProps) {
+export function ParetoChart({ data, totalSum, onBarClick, fill = false }: ParetoChartProps) {
   if (!data || data.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-400 dark:text-gray-600">
-        <svg className="w-12 h-12 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-          />
-        </svg>
+      <div className="flex h-64 flex-col items-center justify-center text-slate-400">
+        <BarChart3 className="mb-2 h-10 w-10" />
         <p className="text-sm">No scored alerts to display</p>
       </div>
     );
   }
 
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-          Pareto by Risk Score
-        </h3>
-        <div className="text-xs text-gray-500 dark:text-gray-400">
-          {displayedCount < totalScoredCount
-            ? `Top ${displayedCount} of ${totalScoredCount} scored alerts`
-            : `${totalScoredCount} scored alerts`}
-          {" · "}Total: {totalSum.toLocaleString()}
-        </div>
-      </div>
+  const rows: Row[] = data.map((d, i) => ({ ...d, rank: i + 1 }));
+  const tickEvery = rows.length > 100 ? 10 : rows.length > 25 ? 5 : rows.length > 12 ? 2 : 1;
 
-      <ResponsiveContainer width="100%" height={320}>
-        <ComposedChart
-          data={data}
-          margin={{ top: 5, right: 30, left: 10, bottom: 5 }}
-          barCategoryGap="10%"
-        >
-          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+  return (
+    <div className={fill ? "flex h-full flex-col" : undefined}>
+      <div className={fill ? "min-h-0 flex-1" : undefined}>
+      <ResponsiveContainer width="100%" height={fill ? "100%" : 300}>
+        <ComposedChart data={rows} margin={{ top: 8, right: 4, left: -12, bottom: 0 }} barCategoryGap="18%">
+          <defs>
+            <linearGradient id="paretoLine" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#2563eb" />
+              <stop offset="100%" stopColor="#4f46e5" />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} stroke="#e8edf5" strokeDasharray="4 4" />
           <XAxis
-            dataKey="external_alert_id"
-            tick={{ fontSize: 10 }}
-            interval={data.length > 20 ? Math.floor(data.length / 10) : 0}
-            angle={-45}
-            textAnchor="end"
-            height={60}
+            dataKey="rank"
+            tick={{ fontSize: 11, fill: "#94a3b8" }}
+            tickLine={false}
+            axisLine={{ stroke: "#e2e8f0" }}
+            interval={tickEvery - 1}
+            tickFormatter={(v) => `#${v}`}
           />
           <YAxis
             yAxisId="left"
-            orientation="left"
-            tick={{ fontSize: 11 }}
-            label={{
-              value: "Score",
-              angle: -90,
-              position: "insideLeft",
-              style: { fontSize: 11, fill: "#6b7280" },
-            }}
+            tick={{ fontSize: 11, fill: "#94a3b8" }}
+            tickLine={false}
+            axisLine={false}
+            width={56}
+            tickFormatter={(v: number) => v.toLocaleString()}
           />
           <YAxis
             yAxisId="right"
             orientation="right"
             domain={[0, 100]}
-            tick={{ fontSize: 11 }}
-            label={{
-              value: "Cumulative %",
-              angle: 90,
-              position: "insideRight",
-              style: { fontSize: 11, fill: "#6b7280" },
-            }}
+            ticks={[0, 25, 50, 75, 100]}
+            tick={{ fontSize: 11, fill: "#94a3b8" }}
+            tickFormatter={(v) => `${v}%`}
+            tickLine={false}
+            axisLine={false}
+            width={40}
           />
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(37, 99, 235, 0.06)" }} />
           <Bar
             yAxisId="left"
             dataKey="score"
-            radius={[2, 2, 0, 0]}
+            radius={[4, 4, 0, 0]}
             cursor="pointer"
-            onClick={(_data: unknown, _index: number, e: React.MouseEvent) => {
-              const d = _data as { alert_id?: string };
-              if (d?.alert_id) onBarClick?.(d.alert_id);
+            onClick={(d: unknown) => {
+              const row = d as { alert_id?: string };
+              if (row?.alert_id) onBarClick?.(row.alert_id);
             }}
           >
-            {data.map((entry, index) => (
-              <Cell
-                key={`cell-${index}`}
-                fill={PRIORITY_COLORS[entry.priority] || PRIORITY_COLORS.unscored}
-              />
+            {rows.map((entry) => (
+              <Cell key={entry.alert_id} fill={PRIORITY_COLORS[entry.priority] || PRIORITY_COLORS.unscored} />
             ))}
           </Bar>
           <Line
             yAxisId="right"
             type="monotone"
             dataKey="cumulative_pct"
-            stroke="#374151"
-            strokeWidth={2}
+            stroke="url(#paretoLine)"
+            strokeWidth={2.5}
             dot={false}
-            activeDot={{ r: 4, fill: "#374151" }}
+            activeDot={{ r: 5, fill: "#2563eb", stroke: "#fff", strokeWidth: 2 }}
           />
         </ComposedChart>
       </ResponsiveContainer>
+      </div>
 
-      {/* Legend */}
-      <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-gray-600 dark:text-gray-400">
-        {(["critical", "high", "moderate", "low"] as const).map((band) => (
-          <div key={band} className="flex items-center gap-1.5">
-            <span
-              className="w-3 h-3 rounded-sm"
-              style={{ backgroundColor: PRIORITY_COLORS[band] }}
-            />
-            <span className="capitalize">{band}</span>
-          </div>
-        ))}
-        <div className="flex items-center gap-1.5">
-          <span className="w-6 h-0.5 bg-gray-700 dark:bg-gray-300" />
-          <span>Cumulative %</span>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 dark:text-slate-400">
+        <div className="flex flex-wrap items-center gap-3">
+          {LEGEND.map((band) => (
+            <span key={band} className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: PRIORITY_COLORS[band] }} />
+              <span className="capitalize">{band}</span>
+            </span>
+          ))}
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-0.5 w-5 rounded bg-gradient-to-r from-blue-600 to-indigo-600" />
+            Cumulative %
+          </span>
         </div>
+        <span className="text-[var(--muted-foreground)]">Total risk score: {totalSum.toLocaleString()}</span>
       </div>
     </div>
   );

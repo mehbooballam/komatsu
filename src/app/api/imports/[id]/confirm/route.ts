@@ -1,83 +1,66 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getSessionFromRequest, requireRole } from "@/lib/auth/api-helper";
+import { canImport, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
 import { processImportBatch } from "@/lib/import/processor";
-import type { ValidatedRow } from "@/lib/import/validator";
-import type { ImportColumnName } from "@/lib/import/constants";
+import { validateRows, type ValidatedRow } from "@/lib/import/validator";
+import { mappingProblems, rowsFromRaw, type ColumnMapping } from "@/lib/import/mapping";
+
+// Imports and AI grouping runs (which continue after the response) can take minutes
+export const maxDuration = 300;
 
 export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getSessionFromRequest();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  if (!requireRole(session, "company_admin", "manager")) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const auth = await getAuth();
+  if (!auth) return unauthorized();
+  if (!canImport(auth.role)) return forbidden();
 
   const { id } = await params;
 
-  const batchResult = await query(
-    `SELECT * FROM import_batches WHERE id = $1 AND company_id = $2`,
-    [id, session.membership.company_id]
+  // Claim the batch and check its state in one statement so concurrent confirmations
+  // cannot both start processing it.
+  const claimed = await query(
+    `UPDATE import_batches SET status = 'processing', started_at = now()
+     WHERE id = $1 AND company_id = $2 AND status = 'previewing'
+     RETURNING feed_id, update_mode, column_mapping, mapping_profile_id`,
+    [id, auth.company_id]
   );
-
-  if (batchResult.rows.length === 0) {
-    return NextResponse.json({ error: "Import batch not found" }, { status: 404 });
-  }
-
-  const batch = batchResult.rows[0];
-
-  if (batch.status !== "previewing") {
+  const batch = claimed.rows[0];
+  if (!batch) {
+    const current = await query(
+      `SELECT status FROM import_batches WHERE id = $1 AND company_id = $2`,
+      [id, auth.company_id]
+    );
+    if (!current.rows[0]) {
+      return NextResponse.json({ error: "Import batch not found" }, { status: 404 });
+    }
     return NextResponse.json(
-      { error: `Cannot confirm batch in status: ${batch.status}` },
-      { status: 400 }
+      { error: `Cannot confirm batch in status: ${current.rows[0].status}` },
+      { status: 409 }
     );
   }
 
-  await query(`UPDATE import_batches SET status = 'processing', started_at = now() WHERE id = $1`, [id]);
-
-  const rowsResult = await query(
-    `SELECT row_number, external_alert_id, raw_payload, validation, state FROM import_rows WHERE batch_id = $1 ORDER BY row_number`,
-    [id]
-  );
-
-  const validatedRows: ValidatedRow[] = rowsResult.rows.map((r) => {
-    const raw = r.raw_payload || {};
-    const mapped: Partial<Record<ImportColumnName, string | null>> = {};
-    const presentColumns = new Set<ImportColumnName>();
-
-    for (const [key, value] of Object.entries(raw)) {
-      const col = key as ImportColumnName;
-      presentColumns.add(col);
-      mapped[col] = value as string | null;
-    }
-
-    const validation = r.validation || { errors: [], warnings: [] };
-    const parsed: Partial<Record<ImportColumnName, unknown>> = { ...mapped };
-
-    if (mapped.alert_id) parsed.alert_id = mapped.alert_id;
-    if (mapped.title) parsed.title = mapped.title;
-
-    return {
-      rowNumber: r.row_number,
-      raw,
-      mapped,
-      presentColumns,
-      parsed,
-      errors: validation.errors || [],
-      warnings: validation.warnings || [],
-      isValid: r.state === "valid",
-      isDuplicate: false,
-    };
-  });
-
   try {
+    const rowsResult = await query(
+      `SELECT row_number, raw_payload FROM import_rows WHERE batch_id = $1 ORDER BY row_number`,
+      [id]
+    );
+
+    // Restore the batch's column mapping (as reviewed in the preview) and use the same validation.
+    const columnMapping: ColumnMapping = batch.column_mapping || {};
+    const problems = mappingProblems(columnMapping);
+    if (problems.length) {
+      await query(`UPDATE import_batches SET status = 'previewing', started_at = NULL WHERE id = $1`, [id]);
+      return NextResponse.json({ error: "Fix the column mapping first", problems }, { status: 400 });
+    }
+    const validatedRows: ValidatedRow[] = validateRows(rowsFromRaw(rowsResult.rows, columnMapping)).rows;
+    if (batch.mapping_profile_id) {
+      await query(`UPDATE import_mapping_profiles SET last_used_at = now() WHERE id = $1`, [batch.mapping_profile_id]);
+    }
     const result = await processImportBatch(
       id,
-      session.membership.company_id,
+      auth.company_id,
       batch.feed_id,
       validatedRows,
       batch.update_mode || "preserve"
@@ -88,13 +71,14 @@ export async function POST(
       status: "completed",
       counts: result,
     });
-  } catch (err) {
-    return NextResponse.json(
-      {
-        error: "Import processing failed",
-        details: err instanceof Error ? err.message : "Unknown error",
-      },
-      { status: 500 }
-    );
+  } catch (error) {
+    console.error("Import processing failed:", error);
+    // Processing can fail before the processor starts its transaction.
+    await query(
+      `UPDATE import_batches SET status = 'failed', completed_at = now(), error_summary = $3
+       WHERE id = $1 AND company_id = $2 AND status = 'processing'`,
+      [id, auth.company_id, JSON.stringify({ message: "Import processing failed" })]
+    ).catch((statusError: unknown) => console.error("Could not update import status:", statusError));
+    return NextResponse.json({ error: "Import processing failed" }, { status: 500 });
   }
 }

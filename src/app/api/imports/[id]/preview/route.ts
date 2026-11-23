@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getSessionFromRequest, requireRole } from "@/lib/auth/api-helper";
+import { canImport, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
+import { autoMapping, batchHeaders, cleanMapping, mappingProblems, mappingTargets, skipReason } from "@/lib/import/mapping";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getSessionFromRequest();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await getAuth();
+  if (!auth) return unauthorized();
+  if (!canImport(auth.role)) return forbidden();
 
   const { id } = await params;
 
@@ -18,7 +18,7 @@ export async function GET(
      FROM import_batches ib
      JOIN feeds f ON f.id = ib.feed_id
      WHERE ib.id = $1 AND ib.company_id = $2`,
-    [id, session.membership.company_id]
+    [id, auth.company_id]
   );
 
   if (batchResult.rows.length === 0) {
@@ -35,7 +35,7 @@ export async function GET(
      LEFT JOIN alerts a ON a.company_id = $2 AND a.feed_id = $3 AND a.external_alert_id = ir.external_alert_id
      WHERE ir.batch_id = $1
      ORDER BY ir.row_number`,
-    [id, session.membership.company_id, batch.feed_id]
+    [id, auth.company_id, batch.feed_id]
   );
 
   const rows = rowsResult.rows.map((r) => ({
@@ -52,7 +52,36 @@ export async function GET(
   const newCount = rows.filter((r) => r.alertStatus === "new" && r.state === "valid").length;
   const updateCount = rows.filter((r) => r.alertStatus === "existing" && r.state === "valid").length;
 
+  // Every column in the file: where it is mapped, the automatic suggestion, and sample values
+  const headers = batchHeaders(batch);
+  const mapping = cleanMapping(batch.column_mapping, headers);
+  const auto = autoMapping(headers);
+  const columns = headers.map((h) => {
+    const values = rows.map((r) => (r.raw ? r.raw[h] : undefined));
+    const present = values.some((v) => v !== undefined);
+    const filled = values.filter((v) => typeof v === "string" && v.trim() !== "");
+    return {
+      header: h,
+      target: mapping[h],
+      auto: auto[h],
+      // Files uploaded before every column was kept have no values for unmapped columns
+      has_data: present,
+      filled: filled.length,
+      samples: [...new Set(filled.map((v) => String(v).trim()))].slice(0, 3).map((v) => (v.length > 160 ? v.slice(0, 157) + "…" : v)),
+      note: skipReason(h),
+    };
+  });
+  const profileRes = batch.mapping_profile_id
+    ? await query(`SELECT id, name FROM import_mapping_profiles WHERE id = $1`, [batch.mapping_profile_id])
+    : null;
+
   return NextResponse.json({
+    mapping: {
+      columns,
+      targets: mappingTargets(),
+      problems: mappingProblems(mapping),
+      profile: profileRes?.rows[0] ?? null,
+    },
     batch: {
       id: batch.id,
       filename: batch.original_filename,

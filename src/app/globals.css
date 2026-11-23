@@ -1,40 +1,130 @@
 @import "tailwindcss";
 
+/* Dark mode is opt-in via the theme toggle (html[data-theme=dark]); it no longer follows the OS setting. */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/*
+ * RiskOrbit brand: deep green #0a3b2f with gold #e2ad5a.
+ * Tailwind's blue scale is remapped to the brand green so every primary button,
+ * link and highlight across the app follows the brand. Priority colours are unchanged.
+ */
+@theme {
+  --color-blue-50: #eef7f3;
+  --color-blue-100: #d5ece3;
+  --color-blue-200: #acd8c8;
+  --color-blue-300: #7cc0a9;
+  --color-blue-400: #45a085;
+  --color-blue-500: #1e8065;
+  --color-blue-600: #0f6450;
+  --color-blue-700: #0b4d3e;
+  --color-blue-800: #0a3b2f;
+  --color-blue-900: #082f26;
+  --color-blue-950: #041a15;
+
+  /* Darkest greys get a slight brand-green tint (used for dark-mode surfaces) */
+  --color-slate-800: #1b2a27;
+  --color-slate-900: #0f1c19;
+  --color-slate-950: #08110f;
+
+  --color-brand: #0a3b2f;
+  --color-gold-50: #fdf7ec;
+  --color-gold-100: #f9e9cc;
+  --color-gold-300: #eec98d;
+  --color-gold-400: #e2ad5a;
+  --color-gold-500: #d4953a;
+  --color-gold-600: #b5772a;
+}
+
 :root {
-  --background: #ffffff;
+  --background: #f5f7f6;
   --foreground: #0f172a;
   --card: #ffffff;
   --card-foreground: #0f172a;
   --popover: #ffffff;
   --popover-foreground: #0f172a;
-  --primary: #1e40af;
+  --primary: #0f6450;
   --primary-foreground: #ffffff;
-  --secondary: #f1f5f9;
+  --secondary: #eef3f1;
   --secondary-foreground: #0f172a;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #f1f5f9;
+  --muted: #eef3f1;
+  --muted-foreground: #5b6b74;
+  --accent: #eef3f1;
   --accent-foreground: #0f172a;
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
-  --border: #e2e8f0;
-  --input: #e2e8f0;
-  --ring: #1e40af;
-  --radius: 0.5rem;
+  --border: #e2e8e5;
+  --input: #d5ddd9;
+  --ring: #0f6450;
+  --radius: 0.75rem;
 
   --priority-critical: #7c3aed;
-  --priority-critical-bg: #ede9fe;
-  --priority-high: #c2410c;
-  --priority-high-bg: #fff7ed;
+  --priority-critical-bg: #f3effe;
+  --priority-high: #dc4a0c;
+  --priority-high-bg: #fff3eb;
   --priority-moderate: #d97706;
-  --priority-moderate-bg: #fffbeb;
+  --priority-moderate-bg: #fff8e6;
   --priority-low: #0d9488;
-  --priority-low-bg: #f0fdfa;
+  --priority-low-bg: #e9fbf7;
   --priority-unscored: #6b7280;
-  --priority-unscored-bg: #f3f4f6;
+  --priority-unscored-bg: #f1f3f6;
 
-  --sidebar-width: 240px;
-  --sidebar-collapsed-width: 64px;
+  /* Sidebar follows the theme: white in light mode, deep brand green in dark mode */
+  --sidebar-bg: #ffffff;
+  --sidebar-fg: #475569;
+  --sidebar-muted: #94a3b8;
+  --sidebar-strong: #0f172a;
+  --sidebar-accent: #0f6450;
+  --sidebar-gold: #e2ad5a;
+  --sidebar-hover: rgba(10, 59, 47, 0.05);
+  --sidebar-active-bg: #eef7f3;
+  --sidebar-active-fg: #0a3b2f;
+  --sidebar-border: #e2e8e5;
+  --sidebar-track: #cbd5e1;
+
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 20px -8px rgba(15, 23, 42, 0.1);
+
+  --sidebar-width: 248px;
+}
+
+:root[data-theme="dark"] {
+  --background: #0a1412;
+  --foreground: #e7efec;
+  --card: #111d1a;
+  --card-foreground: #e7efec;
+  --popover: #111d1a;
+  --popover-foreground: #e7efec;
+  --primary: #45a085;
+  --primary-foreground: #ffffff;
+  --secondary: #1a2a26;
+  --secondary-foreground: #e7efec;
+  --muted: #1a2a26;
+  --muted-foreground: #93a7a0;
+  --accent: #1a2a26;
+  --accent-foreground: #e7efec;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #20322d;
+  --input: #2a3f39;
+  --ring: #45a085;
+
+  --priority-critical-bg: #2a1a4f;
+  --priority-high-bg: #3a1a0c;
+  --priority-moderate-bg: #3a2a08;
+  --priority-low-bg: #0b2f2c;
+  --priority-unscored-bg: #1c2433;
+
+  --sidebar-bg: #0a2a22;
+  --sidebar-fg: #c8d8d2;
+  --sidebar-muted: #86a39a;
+  --sidebar-strong: #ffffff;
+  --sidebar-accent: #7cc0a9;
+  --sidebar-gold: #e2ad5a;
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+  --sidebar-active-bg: rgba(255, 255, 255, 0.1);
+  --sidebar-active-fg: #ffffff;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-track: rgba(255, 255, 255, 0.2);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 @theme inline {
@@ -57,77 +147,35 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --radius: 0.5rem;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --background: #0f172a;
-    --foreground: #f8fafc;
-    --card: #1e293b;
-    --card-foreground: #f8fafc;
-    --popover: #1e293b;
-    --popover-foreground: #f8fafc;
-    --primary: #3b82f6;
-    --primary-foreground: #ffffff;
-    --secondary: #334155;
-    --secondary-foreground: #f8fafc;
-    --muted: #334155;
-    --muted-foreground: #94a3b8;
-    --accent: #334155;
-    --accent-foreground: #f8fafc;
-    --destructive: #ef4444;
-    --destructive-foreground: #ffffff;
-    --border: #334155;
-    --input: #334155;
-    --ring: #3b82f6;
-
-    --priority-critical-bg: #2e1065;
-    --priority-high-bg: #431407;
-    --priority-moderate-bg: #451a03;
-    --priority-low-bg: #042f2e;
-    --priority-unscored-bg: #1f2937;
-  }
-}
-
-:root[data-theme="dark"] {
-  --background: #0f172a;
-  --foreground: #f8fafc;
-  --card: #1e293b;
-  --card-foreground: #f8fafc;
-  --popover: #1e293b;
-  --popover-foreground: #f8fafc;
-  --primary: #3b82f6;
-  --primary-foreground: #ffffff;
-  --secondary: #334155;
-  --secondary-foreground: #f8fafc;
-  --muted: #334155;
-  --muted-foreground: #94a3b8;
-  --accent: #334155;
-  --accent-foreground: #f8fafc;
-  --destructive: #ef4444;
-  --destructive-foreground: #ffffff;
-  --border: #334155;
-  --input: #334155;
-  --ring: #3b82f6;
-
-  --priority-critical-bg: #2e1065;
-  --priority-high-bg: #431407;
-  --priority-moderate-bg: #451a03;
-  --priority-low-bg: #042f2e;
-  --priority-unscored-bg: #1f2937;
+  --radius: 0.75rem;
+  --shadow-card: var(--shadow-card);
 }
 
 * {
   border-color: var(--border);
 }
 
+html {
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 body {
   background-color: var(--background);
   color: var(--foreground);
-  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Shared surface for dashboard panels */
+.panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: var(--shadow-card);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -144,3 +192,27 @@ body {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+
+/* Printing (monthly reports → "Save as PDF"): only the page content, light theme, no app chrome */
+@media print {
+  @page { margin: 14mm 12mm; }
+  :root, :root[data-theme="dark"] { --background: #fff; }
+  html, body { background: #fff !important; color: #111 !important; }
+  aside, [role="region"][aria-label*="otification"] { display: none !important; }
+  main { padding: 0 !important; }
+  main > div { max-width: none !important; padding: 0 !important; margin: 0 !important; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+@media print {
+  .panel { box-shadow: none !important; }
+}
+
+/* Set just before printing a report so charts re-measure at A4 width (186mm ≈ 703px) */
+html.report-printing aside { display: none !important; }
+html.report-printing main { padding-left: 0 !important; }
+html.report-printing main > div { max-width: 703px !important; padding-left: 0 !important; padding-right: 0 !important; margin: 0 !important; }
+@media print {
+  html.report-printing main > div { max-width: none !important; }
+}
+

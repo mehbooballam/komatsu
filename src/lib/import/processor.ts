@@ -158,13 +158,17 @@ async function createAlert(
 ): Promise<string> {
   const p = row.parsed;
 
+  const humanReviewRaw = (p.needs_human_review as string | null) || null;
+  const humanReviewRequired = humanReviewRaw ? !(/^(no|false|n\/a|none)$/i.test(humanReviewRaw.trim())) : false;
+
   const alertResult = await client.query(
     `INSERT INTO alerts (
        company_id, feed_id, external_alert_id, title, overview, summary, relevance,
        published_on, stage, recommendation, change_type, timing_raw, product_raw,
        jurisdiction_raw, agency_name, source_name, source_url, topic_match,
-       provider_review_state, local_state, needs_human_review
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'new',$20)
+       provider_review_state, local_state, needs_human_review,
+       human_review_required, human_review_source, human_review_reason, human_review_flagged_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'new',$20,$21,$22,$23,$24)
      RETURNING id`,
     [
       companyId,
@@ -186,7 +190,11 @@ async function createAlert(
       p.link || null,
       Array.isArray(p.topic_match) ? (p.topic_match as string[]).join(" | ") : (p.topic_match as string) || null,
       mapRecommendation(p.category_algorithm_defined as string | null),
-      p.needs_human_review || null,
+      humanReviewRaw,
+      humanReviewRequired,
+      humanReviewRaw ? true : null,
+      humanReviewRequired ? humanReviewRaw : null,
+      humanReviewRequired ? new Date() : null,
     ]
   );
 
@@ -379,6 +387,18 @@ async function updateAlert(
       sourceUpdates.push(`needs_human_review = $${paramIdx}`);
       sourceValues.push(val ?? null);
       paramIdx++;
+
+      const isRequired = val ? !(/^(no|false|n\/a|none)$/i.test(val.trim())) : false;
+      sourceUpdates.push(`human_review_source = $${paramIdx}`);
+      sourceValues.push(val ? true : null);
+      paramIdx++;
+      sourceUpdates.push(`human_review_reason = $${paramIdx}`);
+      sourceValues.push(isRequired ? val : null);
+      paramIdx++;
+      if (isRequired) {
+        sourceUpdates.push(`human_review_required = TRUE`);
+        sourceUpdates.push(`human_review_flagged_at = COALESCE(human_review_flagged_at, now())`);
+      }
     }
   }
 

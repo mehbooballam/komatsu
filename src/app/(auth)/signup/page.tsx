@@ -7,7 +7,7 @@ import Link from "next/link";
 const TIMEZONES = [
   "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
   "America/Toronto", "America/Vancouver", "Europe/London", "Europe/Paris",
-  "Europe/Berlin", "Europe/Tokyo", "Asia/Tokyo", "Asia/Shanghai",
+  "Europe/Berlin", "Asia/Tokyo", "Asia/Shanghai",
   "Asia/Kolkata", "Australia/Sydney", "Pacific/Auckland", "UTC",
 ];
 

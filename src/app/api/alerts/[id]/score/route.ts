@@ -1,18 +1,29 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getSessionFromRequest } from "@/lib/auth/request-session";
+import { alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 import { recalculateAlert, getAsOfDate } from "@/lib/scoring/recalculate";
 import { VALID_RATINGS } from "@/lib/scoring/engine";
+import { normalizePolicy, MAX_TOTAL } from "@/lib/scoring/policy";
+import { addChangeNotes, commentRequired, readChangeComment } from "@/lib/change-notes";
+
+const TARGET_LABELS: Record<string, string> = {
+  market_access: "Market access",
+  cost_to_implement: "Cost to implement",
+  urgency: "Urgency",
+  total: "Total score",
+};
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(_request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const res = await query(
     `SELECT sa.*, ad.date_value AS deadline_date, ad.kind AS deadline_kind
      FROM score_assessments sa
-     LEFT JOIN alert_deadlines ad ON ad.id = sa.selected_deadline_id
+     LEFT JOIN alert_deadlines ad ON ad.id = sa.selected_deadline_id AND ad.company_id = sa.company_id AND ad.alert_id = sa.alert_id
      WHERE sa.alert_id = $1 AND sa.company_id = $2 AND sa.is_latest = TRUE
      LIMIT 1`,
     [id, session.membership.company_id]
@@ -23,9 +34,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   }
 
   const overrides = await query(
-    `SELECT target, value, reason, expires_at, created_at FROM score_overrides
-     WHERE alert_id = $1 AND company_id = $2 AND ended_at IS NULL
-     ORDER BY created_at DESC`,
+    `SELECT o.target, o.value, o.reason, o.expires_at, o.created_at, p.value AS previous_value
+     FROM score_overrides o
+     LEFT JOIN score_overrides p ON p.id = o.replaces_override_id
+     WHERE o.alert_id = $1 AND o.company_id = $2 AND o.ended_at IS NULL
+     ORDER BY o.created_at DESC`,
     [id, session.membership.company_id]
   );
 
@@ -37,11 +50,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
+  if (!["company_admin", "manager"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const body = await request.json();
   const { target, value, reason, expires_at } = body;
@@ -50,44 +64,95 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: "target, value, and reason are required" }, { status: 400 });
   }
 
-  const validTargets = ["market_access", "cost_to_implement", "human_resources", "urgency"];
+  const validTargets = ["market_access", "cost_to_implement", "human_resources", "urgency", "total"];
   if (!validTargets.includes(target)) {
     return NextResponse.json({ error: `Invalid target. Must be one of: ${validTargets.join(", ")}` }, { status: 400 });
   }
 
-  if (!VALID_RATINGS.includes(value as 1 | 3 | 6 | 9)) {
+  if (target === "total") {
+    const policyRes = await query(
+      `SELECT sp.rules_json FROM companies c JOIN scoring_policies sp ON sp.id = c.active_policy_id WHERE c.id = $1`,
+      [session.membership.company_id]
+    );
+    if (!normalizePolicy(policyRes.rows[0]?.rules_json).total_override_enabled) {
+      return NextResponse.json({ error: "Total score overrides are turned off in the scoring policy" }, { status: 400 });
+    }
+    if (!Number.isInteger(value) || value < 1 || value > MAX_TOTAL) {
+      return NextResponse.json({ error: `Total must be a whole number from 1 to ${MAX_TOTAL}` }, { status: 400 });
+    }
+  } else if (!VALID_RATINGS.includes(value as 1 | 3 | 6 | 9)) {
     return NextResponse.json({ error: "Value must be 1, 3, 6, or 9" }, { status: 400 });
   }
 
-  const alertRes = await query(
-    `SELECT id, record_version FROM alerts WHERE id = $1 AND company_id = $2`,
-    [id, session.membership.company_id]
-  );
-  if (alertRes.rows.length === 0) {
-    return NextResponse.json({ error: "Alert not found" }, { status: 404 });
-  }
-
-  await query(
+  // The adjustment this one replaces; undoing this one brings it back (none = the imported value)
+  const ended = await query(
     `UPDATE score_overrides SET ended_at = NOW()
-     WHERE alert_id = $1 AND company_id = $2 AND target = $3 AND ended_at IS NULL`,
+     WHERE alert_id = $1 AND company_id = $2 AND target = $3 AND ended_at IS NULL
+     RETURNING id, value`,
     [id, session.membership.company_id, target]
   );
+  const replaced = ended.rows[0] ?? null;
 
   await query(
-    `INSERT INTO score_overrides (company_id, alert_id, target, value, reason, created_by, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [session.membership.company_id, id, target, value, reason, session.membership.id, expires_at || null]
+    `INSERT INTO score_overrides (company_id, alert_id, target, value, reason, created_by, expires_at, replaces_override_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [session.membership.company_id, id, target, value, reason, session.membership.id, expires_at || null, replaced?.id ?? null]
   );
 
   await query(
     `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, before_values, after_values, reason)
-     VALUES ($1, $2, 'score_override', 'alert', $3, '{}', $4, $5)`,
+     VALUES ($1, $2, 'score_override', 'alert', $3, $4, $5, $6)`,
     [session.membership.company_id, session.membership.id, id,
-     JSON.stringify({ target, value }), reason]
+     JSON.stringify({ target, value: replaced?.value ?? null }), JSON.stringify({ target, value }), reason]
   );
+
+  // The reason is the person's comment on this change
+  await addChangeNotes(session.membership.company_id, [id], session.membership.id,
+    `Score adjusted: ${TARGET_LABELS[target]} set to ${value}`, String(reason));
 
   const asOfDate = getAsOfDate(session.company.time_zone);
   const result = await recalculateAlert(id, session.membership.company_id, asOfDate, "override");
 
+  return NextResponse.json({ success: true, assessment: result });
+}
+
+/** Clear the active override for one factor (DELETE /api/alerts/:id/score?target=market_access). */
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const session = await getSessionFromRequest();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!["company_admin", "manager"].includes(session.membership.role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
+
+  const target = new URL(request.url).searchParams.get("target");
+  const validTargets = ["market_access", "cost_to_implement", "human_resources", "urgency", "total"];
+  if (!target || !validTargets.includes(target)) {
+    return NextResponse.json({ error: `target must be one of: ${validTargets.join(", ")}` }, { status: 400 });
+  }
+  const comment = readChangeComment(request);
+  if (!comment) return commentRequired();
+
+  const ended = await query(
+    `UPDATE score_overrides SET ended_at = NOW()
+     WHERE alert_id = $1 AND company_id = $2 AND target = $3 AND ended_at IS NULL
+     RETURNING value`,
+    [id, session.membership.company_id, target]
+  );
+  if (ended.rows.length === 0) {
+    return NextResponse.json({ error: "No active override for that factor" }, { status: 404 });
+  }
+
+  await query(
+    `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, before_values, after_values, reason)
+     VALUES ($1, $2, 'score_override_cleared', 'alert', $3, $4, '{}', $5)`,
+    [session.membership.company_id, session.membership.id, id, JSON.stringify({ target, value: ended.rows[0].value }), comment]
+  );
+  await addChangeNotes(session.membership.company_id, [id], session.membership.id,
+    `Score adjustment removed: ${TARGET_LABELS[target]} back to the calculated value`, comment);
+
+  const asOfDate = getAsOfDate(session.company.time_zone);
+  const result = await recalculateAlert(id, session.membership.company_id, asOfDate, "override_cleared");
   return NextResponse.json({ success: true, assessment: result });
 }

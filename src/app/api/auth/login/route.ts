@@ -1,21 +1,21 @@
 import { NextResponse } from "next/server";
-import { query } from "@/lib/db";
+import { query, transaction } from "@/lib/db";
+import { parseEmailAddress } from "@/lib/auth/email-address";
 import { verifyPassword } from "@/lib/auth/password";
-import { createSession } from "@/lib/auth/session";
+import { setSessionCookies, storeSession } from "@/lib/auth/session";
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { email, password, companyId } = body;
+    const body = await request.json().catch(() => null);
+    const { email, password, companyId } = body ?? {};
+    const emailLower = parseEmailAddress(email);
 
-    if (!email || !password) {
+    if (!emailLower || typeof password !== "string" || !password) {
       return NextResponse.json(
         { error: "Email and password are required" },
         { status: 400 }
       );
     }
-
-    const emailLower = email.toLowerCase().trim();
 
     const userResult = await query(
       `SELECT id, email, display_name, password_hash, verified_email
@@ -79,14 +79,23 @@ export async function POST(request: Request) {
       if (match) selectedMembership = match;
     }
 
-    await createSession(user.id, selectedMembership.company_id);
-
-    // Audit
-    await query(
-      `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id)
-       VALUES ($1, $2, 'user.login', 'user', $3)`,
-      [selectedMembership.company_id, selectedMembership.id, user.id]
-    );
+    const session = await transaction(async (client) => {
+      // Serialize login with password reset so an old password cannot mint a new session after it changes.
+      const current = await client.query(
+        `SELECT id FROM user_profiles WHERE id = $1 AND password_hash = $2 AND verified_email = TRUE FOR SHARE`,
+        [user.id, user.password_hash]
+      );
+      if (!current.rowCount) return null;
+      const credentials = await storeSession(user.id, client);
+      await client.query(
+        `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id)
+         VALUES ($1, $2, 'user.login', 'user', $3)`,
+        [selectedMembership.company_id, selectedMembership.id, user.id]
+      );
+      return credentials;
+    });
+    if (!session) return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
+    await setSessionCookies(session, selectedMembership.company_id);
 
     return NextResponse.json({
       user: {
@@ -98,6 +107,7 @@ export async function POST(request: Request) {
         id: selectedMembership.id,
         companyId: selectedMembership.company_id,
         role: selectedMembership.role,
+        accessScope: selectedMembership.access_scope,
         companyName: selectedMembership.company_name,
       },
       companies:

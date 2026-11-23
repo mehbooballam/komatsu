@@ -11,17 +11,15 @@ export default function AlertDetailPage() {
   const alertId = params.id as string;
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-4xl space-y-4">
       <Link
         href="/alerts"
-        className="inline-flex items-center gap-2 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+        className="inline-flex items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium text-[var(--muted-foreground)] transition-colors hover:bg-white hover:text-[var(--foreground)] dark:hover:bg-slate-800"
       >
-        <ArrowLeft className="w-4 h-4" />
-        Back to Alerts
+        <ArrowLeft className="h-4 w-4" />
+        Back to alerts
       </Link>
-      <div className="border rounded-lg bg-[var(--card)]">
-        <AlertDrawer alertId={alertId} onClose={() => {}} />
-      </div>
+      <AlertDrawer alertId={alertId} onClose={() => {}} inline />
     </div>
   );
 }

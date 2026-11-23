@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
+import { format } from "date-fns";
 import { query } from "@/lib/db";
 import { getSessionFromRequest } from "@/lib/auth/request-session";
+import { alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 import { recalculateAlert, getAsOfDate } from "@/lib/scoring/recalculate";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(_request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const res = await query(
     `SELECT f.*, u.display_name AS set_by_name
@@ -23,14 +26,23 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
+  if (!["company_admin", "manager"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const body = await request.json();
   const { remaining_days, estimated_finish_date, reason, deadline_id } = body;
+
+  if (deadline_id != null) {
+    const deadline = await query(
+      `SELECT 1 FROM alert_deadlines WHERE id::text = $1 AND alert_id = $2 AND company_id = $3`,
+      [deadline_id, id, session.membership.company_id]
+    );
+    if (!deadline.rowCount) return NextResponse.json({ error: "Deadline not found" }, { status: 400 });
+  }
 
   if (remaining_days === undefined && !estimated_finish_date) {
     return NextResponse.json({ error: "remaining_days or estimated_finish_date required" }, { status: 400 });
@@ -56,7 +68,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     [
       session.membership.company_id, id, deadline_id || null,
       remaining_days ?? null, estimated_finish_date || null,
-      asOfDate.toISOString().split("T")[0],
+      format(asOfDate, "yyyy-MM-dd"),
       reason || null, session.membership.id,
     ]
   );

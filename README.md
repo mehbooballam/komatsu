@@ -17,6 +17,8 @@ A regulatory risk management dashboard built with Next.js, PostgreSQL, and TypeS
 
 This creates the database user/database, installs dependencies, runs migrations, and seeds demo data. Requires the `postgres` superuser to be accessible (default on macOS Homebrew and most Linux installs).
 
+If `psql` isn't installed but Docker is running (typical on Windows — run the script from Git Bash), the script instead starts a `komatsu-dev-postgres` container (`postgres:17-alpine`) on port **5433** and points `DATABASE_URL` in `.env` at it. After a reboot, run `docker start komatsu-dev-postgres` before `npm run dev`.
+
 ### Manual Setup
 
 #### 1. Install dependencies
@@ -49,13 +51,17 @@ cp .env.example .env
 
 The defaults in `.env.example` match the seed scripts — no changes needed for local dev.
 
+#### Account email
+
+Workspace invitations and password resets send email through [Resend](https://resend.com/docs/api-reference/emails/send-email). Set `RESEND_API_KEY` and `AUTH_EMAIL_FROM` in the server environment using a verified sender. Set `NEXTAUTH_URL` to the app's public HTTPS origin for production. For local development, the default loopback URL is supported. Keep [click tracking](https://resend.com/blog/introducing-custom-tracking-domain) disabled on the sending domain to avoid rewriting credential links. An instance without email configuration can still sign users in and out.
+
 #### 4. Run migrations
 
 ```bash
 npm run db:migrate
 ```
 
-#### 5. Seed demo data
+#### 5. Seed base data
 
 ```bash
 npm run db:seed
@@ -69,13 +75,15 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-### Demo Accounts
+### First Login
+
+The seed creates the company, one admin login, the scoring policy, every ISO country and the product families — **no sample alerts**. Load your data from the **Imports** page (`.xlsx` or `.csv`; download a blank template there).
 
 | Role | Email | Password |
 |------|-------|----------|
-| Admin | demo@komatsu.com | Demo1234! |
-| Manager | manager@komatsu.com | Manager1234! |
-| Risk Owner | owner@komatsu.com | Owner1234! |
+| Admin | admin@komatsu.com | Admin1234! |
+
+Choose your own by setting `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` before seeding, and change the password after first login. Re-running `npm run db:seed` never deletes data.
 
 ## NPM Scripts
 
@@ -132,8 +140,7 @@ src/
 scripts/
   setup.sh          # One-command local setup
   migrate.ts        # Migration runner
-  seed.ts           # Base data seeder
-  seed-alerts.ts    # Alert + scoring seeder
-  run-seed.ts       # Combined seed runner
-templates/          # Generated import template files
+  seed.ts           # Base data (company, admin, policy, countries, product families)
+  run-seed.ts       # Seed runner (npm run db:seed)
+templates/          # Blank import templates
 ```

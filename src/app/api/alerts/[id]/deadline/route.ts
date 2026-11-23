@@ -1,12 +1,20 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getSessionFromRequest } from "@/lib/auth/request-session";
+import { alertNotFound, canAccessAlert } from "@/lib/alerts/access";
 import { recalculateAlert, getAsOfDate } from "@/lib/scoring/recalculate";
+import { addChangeNotes, commentRequired, readChangeComment } from "@/lib/change-notes";
+
+const KIND_LABELS: Record<string, string> = {
+  compliance: "Compliance", comment: "Comment period", effective: "Effective", internal: "Internal",
+  proposed: "Proposed", unknown: "Other",
+};
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(_request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const res = await query(
     `SELECT ad.*, u.display_name AS confirmed_by_name
@@ -23,17 +31,26 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await getSessionFromRequest(request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
+  if (!["company_admin", "manager"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const body = await request.json();
   const { date_value, kind, verification_state, applies_to, evidence } = body;
+  const comment = readChangeComment(request, body) || (typeof evidence === "string" ? evidence.trim() : "");
+  if (!comment) return commentRequired();
 
   if (!date_value || !kind) {
     return NextResponse.json({ error: "date_value and kind are required" }, { status: 400 });
+  }
+  if (typeof date_value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date_value) || Number.isNaN(Date.parse(date_value))) {
+    return NextResponse.json({ error: "Enter a valid date (YYYY-MM-DD)" }, { status: 400 });
+  }
+  if (applies_to && String(applies_to).length > 300) {
+    return NextResponse.json({ error: "Note is too long (max 300 characters)" }, { status: 400 });
   }
 
   const validKinds = ["compliance", "comment", "effective", "internal", "proposed", "unknown"];
@@ -56,8 +73,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, after_values, reason)
      VALUES ($1, $2, 'deadline_added', 'alert', $3, $4, $5)`,
     [session.membership.company_id, session.membership.id, id,
-     JSON.stringify({ date_value, kind, verification_state: verState }), evidence || null]
+     JSON.stringify({ date_value, kind, verification_state: verState }), comment]
   );
+  await addChangeNotes(session.membership.company_id, [id], session.membership.id,
+    `Deadline added: ${KIND_LABELS[kind] ?? kind} ${date_value}${verState === "verified" ? " (verified)" : ""}`, comment);
 
   const asOfDate = getAsOfDate(session.company.time_zone);
   await recalculateAlert(id, session.membership.company_id, asOfDate, "deadline_change");
@@ -67,11 +86,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: alertId } = await params;
-  const session = await getSessionFromRequest(request);
+  const session = await getSessionFromRequest();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!["company_admin", "manager", "reviewer"].includes(session.membership.role)) {
+  if (!["company_admin", "manager"].includes(session.membership.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, alertId))) return alertNotFound();
 
   const body = await request.json();
   const { deadline_id, verification_state, lifecycle_state, kind } = body;
@@ -79,6 +99,8 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   if (!deadline_id) {
     return NextResponse.json({ error: "deadline_id is required" }, { status: 400 });
   }
+  const comment = readChangeComment(request, body);
+  if (!comment) return commentRequired();
 
   const existing = await query(
     `SELECT * FROM alert_deadlines WHERE id = $1 AND alert_id = $2 AND company_id = $3`,
@@ -120,19 +142,31 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
 
-  values.push(deadline_id);
+  values.push(deadline_id, alertId, session.membership.company_id);
   const res = await query(
-    `UPDATE alert_deadlines SET ${updates.join(", ")} WHERE id = $${paramIdx} RETURNING *`,
+    `UPDATE alert_deadlines SET ${updates.join(", ")}
+     WHERE id = $${paramIdx} AND alert_id = $${paramIdx + 1} AND company_id = $${paramIdx + 2} RETURNING *`,
     values
   );
+  if (res.rows.length === 0) return NextResponse.json({ error: "Deadline not found" }, { status: 404 });
 
   await query(
-    `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, before_values, after_values)
-     VALUES ($1, $2, 'deadline_updated', 'alert', $3, $4, $5)`,
+    `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id, before_values, after_values, reason)
+     VALUES ($1, $2, 'deadline_updated', 'alert', $3, $4, $5, $6)`,
     [session.membership.company_id, session.membership.id, alertId,
      JSON.stringify({ verification_state: before.verification_state, lifecycle_state: before.lifecycle_state, kind: before.kind }),
-     JSON.stringify({ verification_state: res.rows[0].verification_state, lifecycle_state: res.rows[0].lifecycle_state, kind: res.rows[0].kind })]
+     JSON.stringify({ verification_state: res.rows[0].verification_state, lifecycle_state: res.rows[0].lifecycle_state, kind: res.rows[0].kind }),
+     comment]
   );
+  const d = res.rows[0];
+  const date = d.date_value instanceof Date ? d.date_value.toISOString().slice(0, 10) : String(d.date_value).slice(0, 10);
+  const what = [
+    verification_state && verification_state !== before.verification_state ? `marked ${String(verification_state).replace(/_/g, " ")}` : null,
+    lifecycle_state && lifecycle_state !== before.lifecycle_state ? `status ${String(lifecycle_state).replace(/_/g, " ")}` : null,
+    kind && kind !== before.kind ? `type changed to ${KIND_LABELS[kind] ?? kind}` : null,
+  ].filter(Boolean).join(", ") || "updated";
+  await addChangeNotes(session.membership.company_id, [alertId], session.membership.id,
+    `Deadline ${date} ${what}`, comment);
 
   const asOfDate = getAsOfDate(session.company.time_zone);
   await recalculateAlert(alertId, session.membership.company_id, asOfDate, "deadline_change");

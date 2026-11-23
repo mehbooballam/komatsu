@@ -27,11 +27,10 @@ export async function getSessionFromRequest(): Promise<SessionContext | null> {
      FROM sessions s
      JOIN user_profiles u ON u.id = s.user_id
      JOIN memberships m ON m.user_id = s.user_id AND m.state = 'active'
-     JOIN companies c ON c.id = m.company_id
+     JOIN companies c ON c.id = m.company_id AND c.archived_at IS NULL
      WHERE s.token = $1 AND s.expires_at > now()
-     ORDER BY m.joined_at ASC
-     LIMIT 1`,
-    [tokenHash]
+     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
+    [tokenHash, cookieStore.get("komatsu_company")?.value ?? ""]
   );
 
   if (result.rows.length === 0) return null;

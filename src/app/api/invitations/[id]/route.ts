@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { query } from "@/lib/db";
+import { transaction } from "@/lib/db";
 import { getServerSession } from "@/lib/auth/middleware";
 import { canInviteUsers } from "@/lib/auth/permissions";
 
@@ -18,25 +18,32 @@ export async function DELETE(
 
     const { id } = await params;
 
-    const result = await query(
-      `UPDATE invitations SET state = 'revoked', revoked_at = now()
-       WHERE id = $1 AND company_id = $2 AND state = 'pending'
-       RETURNING id`,
-      [id, session.company.id]
-    );
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return NextResponse.json({ error: "Invitation not found" }, { status: 404 });
+    }
+    const revoked = await transaction(async (client) => {
+      const result = await client.query(
+        `UPDATE invitations SET state = 'revoked', revoked_at = now()
+         WHERE id = $1 AND company_id = $2 AND state = 'pending'
+           AND ($3 = 'company_admin' OR role IN ('reviewer', 'risk_owner'))
+         RETURNING id`,
+        [id, session.company.id, session.membership.role]
+      );
+      if (!result.rowCount) return false;
+      await client.query(
+        `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id)
+         VALUES ($1, $2, 'invitation.revoked', 'invitation', $3)`,
+        [session.company.id, session.membership.id, id]
+      );
+      return true;
+    });
 
-    if (result.rows.length === 0) {
+    if (!revoked) {
       return NextResponse.json(
         { error: "Invitation not found or already used" },
         { status: 404 }
       );
     }
-
-    await query(
-      `INSERT INTO audit_events (company_id, actor_membership_id, action, entity_type, entity_id)
-       VALUES ($1, $2, 'invitation.revoked', 'invitation', $3)`,
-      [session.company.id, session.membership.id, id]
-    );
 
     return NextResponse.json({ success: true });
   } catch (error: unknown) {

@@ -12,13 +12,17 @@ export async function GET(
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    if (!canManageTeams(session.membership.role)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const { id } = await params;
 
     const result = await query(
       `SELECT tm.id, tm.membership_id, up.display_name, up.email, m.role
        FROM team_memberships tm
-       JOIN memberships m ON m.id = tm.membership_id
+       JOIN teams t ON t.id = tm.team_id AND t.company_id = tm.company_id AND t.archived_at IS NULL
+       JOIN memberships m ON m.id = tm.membership_id AND m.company_id = tm.company_id AND m.state = 'active'
        JOIN user_profiles up ON up.id = m.user_id
        WHERE tm.team_id = $1 AND tm.company_id = $2
        ORDER BY up.display_name`,
@@ -57,6 +61,9 @@ export async function POST(
         { status: 400 }
       );
     }
+
+    const team = await query(`SELECT 1 FROM teams WHERE id::text = $1 AND company_id = $2 AND archived_at IS NULL`, [id, session.company.id]);
+    if (!team.rowCount) return NextResponse.json({ error: "Team not found" }, { status: 404 });
 
     // Verify membership belongs to same company
     const memberCheck = await query(

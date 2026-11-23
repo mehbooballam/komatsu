@@ -4,7 +4,9 @@ import path from "path";
 import pg from "pg";
 
 const pool = new pg.Pool({
+  // Neon: migrate over the direct (unpooled) connection when available
   connectionString:
+    process.env.DATABASE_URL_UNPOOLED ||
     process.env.DATABASE_URL ||
     "postgresql://komatsu:komatsu_dev_2024@127.0.0.1:5432/komatsu_dev",
 });

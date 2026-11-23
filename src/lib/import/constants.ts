@@ -278,3 +278,68 @@ export const SKIP_HEADER_PATTERNS = [
 
 export const PLACEHOLDER_RATIONALE_PATTERN =
   /^\[rationale:\s*\d+.*sentences?\]$/i;
+
+export const COLUMN_STORAGE: Record<ImportColumnName, string> = {
+  alert_id: "alerts.external_alert_id",
+  category_algorithm_defined: "alerts.category_algorithm_defined",
+  title: "alerts.title",
+  overview: "alerts.overview",
+  summary: "alerts.summary",
+  published_on: "alerts.published_on",
+  deadline_date: "alert_deadlines",
+  deadline_description: "alerts.deadline_description",
+  jurisdiction: "alerts.jurisdiction",
+  agency_name: "alerts.agency_name",
+  source: "alerts.source",
+  link: "alerts.link",
+  topic_match: "alert_topics",
+  relevance: "alerts.relevance",
+  product: "alert_product_links",
+  status: "alerts.status",
+  timing: "alerts.timing",
+  change_type: "alerts.change_type",
+  market_access_risk: "source_factor_ratings",
+  cost_to_implement: "source_factor_ratings",
+  human_resources: "source_factor_ratings",
+  urgency: "source_factor_ratings",
+  overall_impact_score: "source_factor_ratings",
+  market_access_risk_rationale: "source_factor_ratings",
+  cost_to_implement_rationale: "source_factor_ratings",
+  human_resources_rationale: "source_factor_ratings",
+  urgency_rationale: "source_factor_ratings",
+  market_access_risk_confidence: "source_factor_ratings",
+  cost_to_implement_confidence: "source_factor_ratings",
+  human_resources_confidence: "source_factor_ratings",
+  urgency_confidence: "source_factor_ratings",
+  needs_human_review: "alerts.needs_human_review",
+  key_dates: "alerts",
+  status_summary: "alerts",
+  status_details: "alerts",
+  timing_summary: "alerts",
+  timing_details: "alerts",
+  change_summary: "alerts",
+  change_details: "alerts",
+};
+
+export const LEGACY_COLUMNS = new Set<ImportColumnName>([]);
+export const NOT_IMPORTED = new Set<ImportColumnName>([]);
+
+export function aliasTarget(header: string): ImportColumnName | null {
+  return HEADER_ALIASES.get(header.toLowerCase().trim()) ?? null;
+}
+
+export function parseHumanReview(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return trimmed || null;
+}
+
+export const CONTEXT_TEXT_COLUMNS: ImportColumnName[] = [
+  "key_dates",
+  "status_summary",
+  "status_details",
+  "timing_summary",
+  "timing_details",
+  "change_summary",
+  "change_details",
+];

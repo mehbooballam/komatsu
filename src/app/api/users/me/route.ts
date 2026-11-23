@@ -9,10 +9,19 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const companies = await query(
+      `SELECT c.id, c.name, c.slug, m.role, c.settings->>'logo' AS logo, c.settings->>'icon' AS icon
+       FROM memberships m JOIN companies c ON c.id = m.company_id
+       WHERE m.user_id = $1 AND m.state = 'active' AND c.archived_at IS NULL
+       ORDER BY c.name`,
+      [session.user.id]
+    );
+
     return NextResponse.json({
       user: session.user,
       membership: session.membership,
       company: session.company,
+      companies: companies.rows,
     });
   } catch (error: unknown) {
     console.error("Get profile error:", error);

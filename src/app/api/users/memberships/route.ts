@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { connection, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { validateSession } from "@/lib/auth/session";
 
 export async function GET() {
+  await connection();
   try {
     const session = await validateSession();
     if (!session) {

@@ -1,4 +1,16 @@
-import { Pool } from "pg";
+import { Pool, types } from "pg";
+
+// Return DATE columns (type 1082) as plain "YYYY-MM-DD" strings. By default pg turns
+// them into a JS Date at local midnight, which shifts the day when serialised to JSON
+// in time zones ahead of UTC (e.g. a 15 Jan deadline showed as 14 Jan).
+types.setTypeParser(1082, (value: string) => value);
+
+/** Parse a "YYYY-MM-DD" date (or Date) as a local calendar date. */
+export function parseDateOnly(value: string | Date): Date {
+  if (value instanceof Date) return value;
+  const [y, m, d] = value.slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,

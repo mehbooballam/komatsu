@@ -48,25 +48,20 @@ export async function getServerSession(): Promise<ServerSession | null> {
   if (userResult.rows.length === 0) return null;
   const user = userResult.rows[0] as AuthUser;
 
-  let membershipQuery: string;
-  let membershipParams: string[];
-
-  if (companyId) {
-    membershipQuery = `SELECT id, company_id, user_id, role, access_scope, state
-      FROM memberships WHERE user_id = $1 AND company_id = $2 AND state = 'active'`;
-    membershipParams = [session.userId, companyId];
-  } else {
-    membershipQuery = `SELECT id, company_id, user_id, role, access_scope, state
-      FROM memberships WHERE user_id = $1 AND state = 'active' ORDER BY joined_at ASC LIMIT 1`;
-    membershipParams = [session.userId];
-  }
-
-  const membershipResult = await query(membershipQuery, membershipParams);
+  // Prefer the selected workspace (komatsu_company cookie); fall back to the
+  // user's first workspace if the cookie is missing or no longer valid.
+  const membershipResult = await query(
+    `SELECT m.id, m.company_id, m.user_id, m.role, m.access_scope, m.state
+     FROM memberships m JOIN companies c ON c.id = m.company_id AND c.archived_at IS NULL
+     WHERE m.user_id = $1 AND m.state = 'active'
+     ORDER BY (m.company_id::text = $2) DESC, m.joined_at ASC LIMIT 1`,
+    [session.userId, companyId ?? ""]
+  );
   if (membershipResult.rows.length === 0) return null;
   const membership = membershipResult.rows[0] as AuthMembership;
 
   const companyResult = await query(
-    `SELECT id, name, slug, time_zone, active_policy_id, settings FROM companies WHERE id = $1`,
+    `SELECT id, name, slug, time_zone, active_policy_id, settings FROM companies WHERE id = $1 AND archived_at IS NULL`,
     [membership.company_id]
   );
   if (companyResult.rows.length === 0) return null;

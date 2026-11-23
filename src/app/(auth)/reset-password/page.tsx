@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Suspense } from "react";
+import { useEmailLinkToken } from "@/hooks/use-email-link-token";
 
 function ResetForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const token = searchParams.get("token") || "";
+  const token = useEmailLinkToken();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -28,7 +28,7 @@ function ResetForm() {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Reset failed"); return; }
-      router.push("/login");
+      router.replace("/login");
     } catch {
       setError("Network error.");
     } finally {

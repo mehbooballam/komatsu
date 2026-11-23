@@ -5,9 +5,12 @@ import {
   CONFIDENCE_COLUMNS,
   DETAIL_COLUMNS,
   PLACEHOLDER_RATIONALE_PATTERN,
+  parseHumanReview,
+  CONTEXT_TEXT_COLUMNS,
   type ImportColumnName,
 } from "./constants";
 import type { ParsedRow } from "./parser-xlsx";
+import { normalizeConfidence } from "@/lib/scoring/confidence";
 
 export interface FieldError {
   field: string;
@@ -139,8 +142,19 @@ export function validateRows(rows: ParsedRow[]): ValidationResult {
     if (row.mapped.timing) parsed.timing = row.mapped.timing;
     if (row.mapped.change_type) parsed.change_type = row.mapped.change_type;
     if (row.mapped.deadline_description) parsed.deadline_description = row.mapped.deadline_description;
+    for (const col of CONTEXT_TEXT_COLUMNS) {
+      const v = row.mapped[col];
+      if (v && v.trim()) parsed[col] = v.trim();
+    }
     if (row.mapped.category_algorithm_defined) {
       parsed.category_algorithm_defined = row.mapped.category_algorithm_defined;
+    }
+
+    parsed.needs_human_review = parseHumanReview(row.mapped.needs_human_review);
+
+    for (const col of Object.values(CONFIDENCE_COLUMNS)) {
+      const conf = normalizeConfidence(row.mapped[col]);
+      if (conf) parsed[col] = conf;
     }
 
     if (row.mapped.published_on) {
@@ -250,16 +264,6 @@ export function validateRows(rows: ParsedRow[]): ValidationResult {
           });
           parsed[confCol] = rawConf.trim();
         }
-      }
-    }
-
-    if (row.mapped.needs_human_review) {
-      parsed.needs_human_review = row.mapped.needs_human_review;
-    }
-
-    for (const col of DETAIL_COLUMNS) {
-      if (row.mapped[col]) {
-        parsed[col] = row.mapped[col];
       }
     }
 

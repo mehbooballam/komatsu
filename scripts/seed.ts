@@ -315,6 +315,7 @@ export async function seed() {
     console.log(`Policy ID:  ${policyId}`);
 
     return {
+      created: true,
       companyId,
       adminUserId,
       adminMembershipId,
@@ -346,4 +347,6 @@ if (require.main === module || process.argv[1]?.endsWith("seed.ts")) {
     });
 }
 
+export const ADMIN_EMAIL = "demo@komatsu.com";
+export const ADMIN_PASSWORD = "Demo1234!";
 export { pool };

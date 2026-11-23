@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit } from "@/lib/auth-helpers";
+import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 
 export async function GET() {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
 
   const res = await query(
     `SELECT tl.*, (SELECT COUNT(*) FROM alert_tags at2 WHERE at2.tag_id = tl.id) as usage_count
@@ -18,6 +20,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
+  if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   if (!canEdit(auth.role)) return forbidden();
 
   const body = await request.json();
