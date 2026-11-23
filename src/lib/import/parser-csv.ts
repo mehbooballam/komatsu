@@ -40,9 +40,7 @@ export function parseCsv(buffer: Buffer): ParseResult {
     detectedHeaders.push(rawHeader);
     const mapped = normalizeHeader(rawHeader);
 
-    if (mapped === "skip") {
-      mappedHeaders[rawHeader] = null;
-    } else if (mapped) {
+    if (mapped) {
       if (seenMapped.has(mapped)) {
         duplicateHeaders.push(rawHeader);
         warnings.push(`Duplicate header mapping: "${rawHeader}" maps to "${mapped}" which was already mapped.`);

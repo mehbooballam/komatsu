@@ -1419,6 +1419,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
           alertTitle={data.alert.title}
           factors={scoreFactors}
           liveUrgency={data.assessment?.factor_urgency ?? null}
+          totalOverride={totalOverride?.value ?? null}
           onSave={saveScore}
           onClearOverride={clearOverride}
           onClose={() => setScoreOpen(false)}

@@ -64,7 +64,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: "target, value, and reason are required" }, { status: 400 });
   }
 
-  const validTargets = ["market_access", "cost_to_implement", "human_resources", "urgency", "total"];
+  const validTargets = ["market_access", "cost_to_implement", "urgency", "total"];
   if (!validTargets.includes(target)) {
     return NextResponse.json({ error: `Invalid target. Must be one of: ${validTargets.join(", ")}` }, { status: 400 });
   }
@@ -127,7 +127,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   if (!(await canAccessAlert({ ...session.membership, membership_id: session.membership.id }, id))) return alertNotFound();
 
   const target = new URL(request.url).searchParams.get("target");
-  const validTargets = ["market_access", "cost_to_implement", "human_resources", "urgency", "total"];
+  const validTargets = ["market_access", "cost_to_implement", "urgency", "total"];
   if (!target || !validTargets.includes(target)) {
     return NextResponse.json({ error: `target must be one of: ${validTargets.join(", ")}` }, { status: 400 });
   }

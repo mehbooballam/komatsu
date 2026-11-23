@@ -1,11 +1,9 @@
 import {
   VALID_RATINGS,
-  VALID_CONFIDENCE,
   FACTOR_COLUMNS,
-  CONFIDENCE_COLUMNS,
-  DETAIL_COLUMNS,
   PLACEHOLDER_RATIONALE_PATTERN,
   parseHumanReview,
+  CONFIDENCE_COLUMNS,
   CONTEXT_TEXT_COLUMNS,
   type ImportColumnName,
 } from "./constants";
@@ -149,9 +147,9 @@ export function validateRows(rows: ParsedRow[]): ValidationResult {
     if (row.mapped.category_algorithm_defined) {
       parsed.category_algorithm_defined = row.mapped.category_algorithm_defined;
     }
-
+    // Need Human Review: { flag, reason } or null when the cell is blank
     parsed.needs_human_review = parseHumanReview(row.mapped.needs_human_review);
-
+    // Per-factor confidence: "High" / "Medium" / "Low" or "85%"
     for (const col of Object.values(CONFIDENCE_COLUMNS)) {
       const conf = normalizeConfidence(row.mapped[col]);
       if (conf) parsed[col] = conf;
@@ -171,17 +169,17 @@ export function validateRows(rows: ParsedRow[]): ValidationResult {
       }
     }
 
-    if (row.mapped.deadline_date) {
-      const result = parseDate(row.mapped.deadline_date);
+    if (row.mapped.compliance_deadline) {
+      const result = parseDate(row.mapped.compliance_deadline);
       if (result.valid) {
-        parsed.deadline_date = result.date;
+        parsed.compliance_deadline = result.date;
       } else {
         warnings.push({
-          field: "deadline_date",
-          message: `Ambiguous or invalid date: "${row.mapped.deadline_date}"`,
+          field: "compliance_deadline",
+          message: `Ambiguous or invalid date: "${row.mapped.compliance_deadline}"`,
           severity: "warning",
         });
-        parsed.deadline_date = row.mapped.deadline_date;
+        parsed.compliance_deadline = row.mapped.compliance_deadline;
       }
     }
 
@@ -249,23 +247,6 @@ export function validateRows(rows: ParsedRow[]): ValidationResult {
     parsed.urgency_rationale = cleanRationale(
       row.mapped.urgency_rationale ?? null
     );
-
-    for (const [, confCol] of Object.entries(CONFIDENCE_COLUMNS)) {
-      const rawConf = row.mapped[confCol];
-      if (rawConf) {
-        const normalized = rawConf.trim().toLowerCase();
-        if (VALID_CONFIDENCE.has(normalized)) {
-          parsed[confCol] = rawConf.trim();
-        } else {
-          warnings.push({
-            field: confCol,
-            message: `Non-standard confidence value: "${rawConf}" (expected High, Medium, or Low)`,
-            severity: "warning",
-          });
-          parsed[confCol] = rawConf.trim();
-        }
-      }
-    }
 
     for (const err of errors) {
       fieldErrors[err.field] = (fieldErrors[err.field] || 0) + 1;

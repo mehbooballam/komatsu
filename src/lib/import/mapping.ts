@@ -39,7 +39,7 @@ export function autoMapping(headers: string[]): ColumnMapping {
   const used = new Set<ImportColumnName>();
   for (const h of headers) {
     const col = normalizeHeader(h);
-    if (col && col !== "skip" && !used.has(col)) {
+    if (col && !used.has(col)) {
       out[h] = col;
       used.add(col);
     } else {

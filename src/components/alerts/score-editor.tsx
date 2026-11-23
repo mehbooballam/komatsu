@@ -1,7 +1,12 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { X, AlertTriangle, RotateCcw } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { X, AlertTriangle, RotateCcw, Loader2, Lock } from "lucide-react";
+import {
+  DEFAULT_POLICY, FACTOR_KEYS, FACTOR_LABELS, MAX_TOTAL, RATING_VALUES,
+  bandForTotal, factorEscalations, maxBand, normalizePolicy,
+  type Band, type ScoringPolicy,
+} from "@/lib/scoring/policy";
 
 interface FactorState {
   source: number | null;
@@ -15,154 +20,95 @@ interface ScoreEditorProps {
   alertTitle: string;
   factors: Record<string, FactorState>;
   liveUrgency: number | null;
+  /** Active total-score override, if any. */
+  totalOverride?: number | null;
   onSave: (changes: Array<{ target: string; value: number; reason: string }>) => Promise<void>;
   onClearOverride: (target: string) => Promise<void>;
   onClose: () => void;
 }
 
-const FACTOR_LABELS: Record<string, { label: string; short: string; descriptions: Record<number, string> }> = {
-  market_access: {
-    label: "Market Access (A)",
-    short: "A",
-    descriptions: {
-      1: "USD 0 to under 100,000",
-      3: "USD 100,000 to 1,000,000",
-      6: "Over USD 1,000,000 through 5,000,000",
-      9: "Over USD 5,000,000",
-    },
-  },
-  cost_to_implement: {
-    label: "Cost to Implement (B)",
-    short: "B",
-    descriptions: {
-      1: "USD 0 to under 25,000",
-      3: "USD 25,000 to 250,000",
-      6: "Over USD 250,000 through 1,000,000",
-      9: "Over USD 1,000,000",
-    },
-  },
-  human_resources: {
-    label: "Additional People (C)",
-    short: "C",
-    descriptions: {
-      1: "No additional FTE",
-      3: "More than 0 through 5 FTE",
-      6: "More than 5 through 10 FTE",
-      9: "More than 10 FTE",
-    },
-  },
-  urgency: {
-    label: "Live Urgency (D)",
-    short: "D",
-    descriptions: {
-      1: "More than 36 months",
-      3: "More than 18 through 36 months",
-      6: "More than 6 through 18 months",
-      9: "6 months or less / due / overdue",
-    },
-  },
-};
-
-const ALLOWED_VALUES = [1, 3, 6, 9];
-
-function calculateBand(total: number): string {
-  if (total <= 80) return "low";
-  if (total <= 500) return "moderate";
-  if (total <= 2000) return "high";
-  return "critical";
-}
-
-function getEscalations(factors: Record<string, number | null>): string[] {
-  const reasons: string[] = [];
-  const a = factors.market_access;
-  const d = factors.urgency;
-  if (a === 9) reasons.push("Market access = 9 → minimum High");
-  if (d === 9) reasons.push("Urgency = 9 → Critical");
-  if (a === 9 && d != null && d >= 6) reasons.push("Market access = 9 AND Urgency ≥ 6 → Critical");
-  return reasons;
-}
-
-function getEffectiveBand(total: number | null, factors: Record<string, number | null>): string {
-  if (total == null) return "unscored";
-  let band = calculateBand(total);
-  const bandOrder: Record<string, number> = { low: 0, moderate: 1, high: 2, critical: 3 };
-  if (factors.market_access === 9 && bandOrder[band] < bandOrder.high) band = "high";
-  if (factors.urgency === 9) band = "critical";
-  if (factors.market_access === 9 && factors.urgency != null && factors.urgency >= 6) band = "critical";
-  return band;
-}
-
-const BAND_COLORS: Record<string, string> = {
-  critical: "bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/40 dark:text-purple-200 dark:border-purple-700",
-  high: "bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/40 dark:text-orange-200 dark:border-orange-700",
-  moderate: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/40 dark:text-amber-200 dark:border-amber-700",
-  low: "bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-900/40 dark:text-teal-200 dark:border-teal-700",
-  unscored: "bg-gray-100 text-gray-600 border-gray-300 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700",
+const BAND_CHIP: Record<Band | "unscored", string> = {
+  critical: "bg-violet-100 text-violet-800 ring-violet-300 dark:bg-violet-500/20 dark:text-violet-200 dark:ring-violet-500/40",
+  high: "bg-orange-100 text-orange-800 ring-orange-300 dark:bg-orange-500/20 dark:text-orange-200 dark:ring-orange-500/40",
+  moderate: "bg-amber-100 text-amber-800 ring-amber-300 dark:bg-amber-500/20 dark:text-amber-200 dark:ring-amber-500/40",
+  low: "bg-teal-100 text-teal-800 ring-teal-300 dark:bg-teal-500/20 dark:text-teal-200 dark:ring-teal-500/40",
+  unscored: "bg-slate-100 text-slate-600 ring-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:ring-slate-600",
 };
 
 export function ScoreEditor({
-  alertId,
   alertTitle,
   factors: initialFactors,
   liveUrgency,
+  totalOverride = null,
   onSave,
   onClearOverride,
   onClose,
 }: ScoreEditorProps) {
-  const [editedValues, setEditedValues] = useState<Record<string, number | null>>({
-    market_access: initialFactors.market_access?.effective ?? null,
-    cost_to_implement: initialFactors.cost_to_implement?.effective ?? null,
-    human_resources: initialFactors.human_resources?.effective ?? null,
-    urgency: initialFactors.urgency?.effective ?? null,
-  });
+  const [policy, setPolicy] = useState<ScoringPolicy>(DEFAULT_POLICY);
+  const [edited, setEdited] = useState<Record<string, number | null>>(() =>
+    Object.fromEntries(FACTOR_KEYS.map((k) => [k, initialFactors[k]?.effective ?? null]))
+  );
   const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [useTotal, setUseTotal] = useState(totalOverride != null);
+  const [totalValue, setTotalValue] = useState<string>(totalOverride != null ? String(totalOverride) : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const previewTotal = useMemo(() => {
-    const a = editedValues.market_access;
-    const b = editedValues.cost_to_implement;
-    const c = editedValues.human_resources;
-    const d = editedValues.urgency;
-    if (a == null || b == null || c == null || d == null) return null;
-    return a * b * c * d;
-  }, [editedValues]);
+  useEffect(() => {
+    fetch("/api/scoring/policy")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setPolicy(normalizePolicy(d.policy)));
+  }, []);
 
-  const previewBand = useMemo(
-    () => getEffectiveBand(previewTotal, editedValues),
-    [previewTotal, editedValues]
-  );
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !e.defaultPrevented && !saving && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [saving, onClose]);
 
-  const escalations = useMemo(() => getEscalations(editedValues), [editedValues]);
+  const factorTotal = useMemo(() => {
+    const vals = FACTOR_KEYS.map((k) => edited[k]);
+    return vals.some((v) => v == null) ? null : (vals as number[]).reduce((a, b) => a * b, 1);
+  }, [edited]);
 
-  const hasChanges = useMemo(() => {
-    return Object.keys(FACTOR_LABELS).some((key) => {
-      return editedValues[key] !== (initialFactors[key]?.effective ?? null);
-    });
-  }, [editedValues, initialFactors]);
+  const totalNum = Number(totalValue);
+  const totalValid = Number.isInteger(totalNum) && totalNum >= 1 && totalNum <= MAX_TOTAL;
+  const previewTotal = useTotal && policy.total_override_enabled && totalValid ? totalNum : factorTotal;
+
+  const escalations = factorEscalations({ market_access: edited.market_access, urgency: edited.urgency }, policy);
+  const previewBand: Band | "unscored" =
+    previewTotal == null
+      ? "unscored"
+      : escalations.reduce<Band | null>((b, e) => maxBand(b, e.resulting_band), bandForTotal(previewTotal, policy)) || "low";
+
+  const changedFactors = FACTOR_KEYS.filter((k) => edited[k] !== (initialFactors[k]?.effective ?? null) && edited[k] != null);
+  const totalChanged = useTotal ? totalValid && totalNum !== totalOverride : false;
+  const hasChanges = changedFactors.length > 0 || totalChanged;
 
   const handleSave = async () => {
     const changes: Array<{ target: string; value: number; reason: string }> = [];
-
-    for (const key of Object.keys(FACTOR_LABELS)) {
-      if (editedValues[key] !== (initialFactors[key]?.effective ?? null) && editedValues[key] != null) {
-        if (!reasons[key]?.trim()) {
-          setError(`Reason required for ${FACTOR_LABELS[key].label} change`);
-          return;
-        }
-        changes.push({
-          target: key,
-          value: editedValues[key]!,
-          reason: reasons[key].trim(),
-        });
+    for (const key of changedFactors) {
+      if (!reasons[key]?.trim()) {
+        setError(`Add a reason for the ${FACTOR_LABELS[key]} change`);
+        return;
       }
+      changes.push({ target: key, value: edited[key]!, reason: reasons[key].trim() });
     }
-
-    if (changes.length === 0) {
+    if (useTotal && !totalValid) {
+      setError(`Total must be a whole number from 1 to ${MAX_TOTAL.toLocaleString()}`);
+      return;
+    }
+    if (totalChanged) {
+      if (!reasons.total?.trim()) {
+        setError("Add a reason for overriding the total score");
+        return;
+      }
+      changes.push({ target: "total", value: totalNum, reason: reasons.total.trim() });
+    }
+    if (!changes.length) {
       onClose();
       return;
     }
-
     setSaving(true);
     setError(null);
     try {
@@ -175,136 +121,162 @@ export function ScoreEditor({
     }
   };
 
+  const inputCls =
+    "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-lg bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => !saving && onClose()} />
+      <div role="dialog" aria-modal="true" aria-labelledby="score-editor-title" className="relative z-10 flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-slate-900">
         {/* Header */}
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-5 py-3 rounded-t-2xl">
-          <div>
-            <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">Edit Ratings</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[300px]">{alertTitle}</p>
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <div className="min-w-0">
+            <h3 id="score-editor-title" className="text-base font-bold text-slate-900 dark:text-white">Adjust score</h3>
+            <p className="truncate text-xs text-slate-500">{alertTitle}</p>
           </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800">
+          <button onClick={onClose} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto p-5">
           {/* Preview */}
-          <div className="flex items-center justify-between rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+          <div className="flex items-center justify-between rounded-xl bg-slate-50 p-4 dark:bg-slate-800/60">
             <div>
-              <span className="text-xs text-gray-500 dark:text-gray-400">Preview Total</span>
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 tabular-nums">
-                {previewTotal ?? "—"}
-              </div>
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">New total</span>
+              <div className="text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{previewTotal?.toLocaleString() ?? "—"}</div>
+              {useTotal && factorTotal != null && previewTotal !== factorTotal && (
+                <div className="text-xs text-slate-500">Calculated A × B × C would be {factorTotal.toLocaleString()}</div>
+              )}
             </div>
-            <span className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold border capitalize ${BAND_COLORS[previewBand]}`}>
-              {previewBand === "unscored" && "Unscored"}
-              {previewBand !== "unscored" && previewBand}
-            </span>
+            <span className={`rounded-full px-3 py-1 text-sm font-semibold capitalize ring-1 ${BAND_CHIP[previewBand]}`}>{previewBand}</span>
           </div>
 
           {escalations.length > 0 && (
-            <div className="rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 p-2.5 text-xs">
-              <div className="flex items-center gap-1 font-semibold text-purple-800 dark:text-purple-200 mb-0.5">
+            <div className="rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs dark:border-violet-500/30 dark:bg-violet-500/10">
+              <div className="mb-0.5 flex items-center gap-1 font-semibold text-violet-800 dark:text-violet-200">
                 <AlertTriangle className="h-3.5 w-3.5" /> Escalation
               </div>
               {escalations.map((e, i) => (
-                <div key={i} className="text-purple-700 dark:text-purple-300">{e}</div>
+                <div key={i} className="text-violet-700 dark:text-violet-300">{e.description}</div>
               ))}
             </div>
           )}
 
-          {/* Factor Editors */}
-          {Object.entries(FACTOR_LABELS).map(([key, meta]) => {
+          {/* Factors */}
+          {FACTOR_KEYS.map((key) => {
             const factor = initialFactors[key];
-            const isUrgency = key === "urgency";
-            const changed = editedValues[key] !== (factor?.effective ?? null);
-
+            const changed = changedFactors.includes(key);
             return (
-              <div key={key} className="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {meta.label}
-                  </label>
+              <div key={key} className={`rounded-xl border p-4 ${changed ? "border-blue-300 dark:border-blue-500/50" : "border-slate-200 dark:border-slate-700"}`}>
+                <div className="mb-2 flex items-center justify-between">
+                  <label className="text-sm font-semibold text-slate-800 dark:text-slate-200">{FACTOR_LABELS[key]}</label>
                   {factor?.override != null && (
-                    <button
-                      onClick={() => onClearOverride(key)}
-                      className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                    >
-                      <RotateCcw className="h-3 w-3" /> Clear override
+                    <button onClick={() => onClearOverride(key)} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline">
+                      <RotateCcw className="h-3 w-3" /> Undo last change
                     </button>
                   )}
                 </div>
-
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xs text-gray-500 dark:text-gray-400 w-16">Source: {factor?.source ?? "—"}</span>
-                  {isUrgency && liveUrgency != null && (
-                    <span className="text-xs text-gray-500 dark:text-gray-400">Live: {liveUrgency}</span>
-                  )}
+                <div className="mb-2 flex gap-3 text-xs text-slate-500">
+                  <span>From source: {factor?.source ?? "—"}</span>
+                  {key === "urgency" && liveUrgency != null && <span>Live: {liveUrgency}</span>}
                 </div>
-
-                <div className="flex gap-2 mb-2">
-                  {ALLOWED_VALUES.map((v) => (
+                <div className="mb-2 grid grid-cols-4 gap-2">
+                  {RATING_VALUES.map((v) => (
                     <button
                       key={v}
-                      onClick={() =>
-                        setEditedValues((prev) => ({ ...prev, [key]: v }))
-                      }
-                      className={`flex-1 rounded-lg border py-2 text-sm font-medium transition-colors ${
-                        editedValues[key] === v
-                          ? "bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 border-gray-900 dark:border-gray-100"
-                          : "bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
+                      onClick={() => setEdited((prev) => ({ ...prev, [key]: v }))}
+                      title={policy.factors[key].boundaries[String(v)]}
+                      className={`rounded-lg border py-2 text-sm font-semibold transition-colors ${
+                        edited[key] === v
+                          ? "border-blue-600 bg-blue-600 text-white shadow-sm"
+                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                       }`}
-                      title={meta.descriptions[v]}
                     >
                       {v}
                     </button>
                   ))}
                 </div>
-
-                {editedValues[key] != null && (
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                    {meta.descriptions[editedValues[key]!]}
-                  </div>
-                )}
-
+                {edited[key] != null && <div className="text-xs text-slate-500">{policy.factors[key].boundaries[String(edited[key])]}</div>}
                 {changed && (
                   <input
                     type="text"
                     placeholder="Reason for change (required)"
                     value={reasons[key] || ""}
-                    onChange={(e) =>
-                      setReasons((prev) => ({ ...prev, [key]: e.target.value }))
-                    }
-                    className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onChange={(e) => setReasons((prev) => ({ ...prev, [key]: e.target.value }))}
+                    className={`mt-2 ${inputCls}`}
                   />
                 )}
               </div>
             );
           })}
 
-          {error && (
-            <div className="text-sm text-red-600 dark:text-red-400">{error}</div>
-          )}
-
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-2">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!hasChanges || saving}
-              className="px-4 py-2 rounded-lg bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {saving ? "Saving..." : "Save Changes"}
-            </button>
+          {/* Total override */}
+          <div className={`rounded-xl border p-4 ${useTotal ? "border-blue-300 bg-blue-50/40 dark:border-blue-500/50 dark:bg-blue-500/5" : "border-slate-200 dark:border-slate-700"}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">Override total score</p>
+                <p className="text-xs text-slate-500">Replace Market access × Cost to implement × Urgency with your own total (1 – {MAX_TOTAL.toLocaleString()})</p>
+              </div>
+              {policy.total_override_enabled ? (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={useTotal}
+                  aria-label="Override total score"
+                  onClick={() => setUseTotal(!useTotal)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${useTotal ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"}`}
+                >
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${useTotal ? "left-[22px]" : "left-0.5"}`} />
+                </button>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-xs text-slate-400"><Lock className="h-3.5 w-3.5" /> Off in scoring policy</span>
+              )}
+            </div>
+            {useTotal && policy.total_override_enabled && (
+              <div className="mt-3 grid gap-2 sm:grid-cols-[140px_1fr]">
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_TOTAL}
+                  value={totalValue}
+                  onChange={(e) => setTotalValue(e.target.value)}
+                  placeholder={factorTotal != null ? String(factorTotal) : "Total"}
+                  className={`${inputCls} tabular-nums`}
+                  aria-label="Total score"
+                />
+                <input
+                  type="text"
+                  placeholder="Reason for override (required)"
+                  value={reasons.total || ""}
+                  onChange={(e) => setReasons((prev) => ({ ...prev, total: e.target.value }))}
+                  className={inputCls}
+                />
+              </div>
+            )}
+            {totalOverride != null && (
+              <button onClick={() => onClearOverride("total")} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline">
+                <RotateCcw className="h-3 w-3" /> Undo last total change ({totalOverride.toLocaleString()})
+              </button>
+            )}
           </div>
+
+          {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300">{error}</div>}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-800">
+          <button onClick={onClose} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!hasChanges || saving}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            Save changes
+          </button>
         </div>
       </div>
     </div>

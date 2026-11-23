@@ -1,7 +1,8 @@
 import * as XLSX from "xlsx";
-import { COLUMN_DEFS as ALL_COLUMN_DEFS, IMPORT_COLUMNS, type ColumnDef } from "./constants";
+import { COLUMN_DEFS as ALL_COLUMN_DEFS, IMPORTED_COLUMNS as IMPORT_COLUMNS } from "./constants";
 
-const COLUMN_DEFS: ColumnDef[] = IMPORT_COLUMNS.map((c) => ALL_COLUMN_DEFS.find((d) => d.name === c)).filter((d): d is ColumnDef => !!d);
+// Field definitions in the same order as the template columns
+const COLUMN_DEFS = IMPORT_COLUMNS.map((c) => ALL_COLUMN_DEFS.find((d) => d.name === c)).filter((d) => !!d);
 
 export function generateXlsxTemplate(): Buffer {
   const wb = XLSX.utils.book_new();
