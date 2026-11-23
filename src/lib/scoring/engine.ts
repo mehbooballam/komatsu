@@ -7,6 +7,7 @@ import {
   normalizePolicy,
   escalationText,
   MAX_TOTAL,
+  MISSING_HUMAN_RESOURCES,
   type Band,
   type FactorKey,
   type ScoringPolicy,
@@ -262,6 +263,7 @@ export interface Override {
  * Resolve the effective factor values from source ratings, overrides, and deadline.
  *
  * For A, B, C: active local override first, then valid source rating.
+ * C (Human resources) counts as 1 when the alert has no rating.
  * For D: live deadline-derived urgency by default; manual override if active.
  */
 export function resolveEffectiveFactors(
@@ -293,12 +295,13 @@ export function resolveEffectiveFactors(
 
   const overrideA = activeOverride("market_access");
   const overrideB = activeOverride("cost_to_implement");
+  const overrideC = activeOverride("human_resources");
   const overrideD = activeOverride("urgency");
 
   const effectiveA = overrideA ? overrideA.value : sourceA;
   const effectiveB = overrideB ? overrideB.value : sourceB;
-  // "Additional people" is no longer part of the score (kept only in import history).
-  const effectiveC = null;
+  const sourceC = sourceRatings.human_resources ?? null;
+  const effectiveC = overrideC ? overrideC.value : sourceC ?? MISSING_HUMAN_RESOURCES;
 
   let urgencyResult: UrgencyResult;
 
@@ -331,7 +334,7 @@ export function resolveEffectiveFactors(
     factors: {
       market_access: sourceA,
       cost_to_implement: sourceB,
-      human_resources: null,
+      human_resources: sourceC,
       urgency: liveD,
     },
     urgencyResult,
@@ -372,6 +375,7 @@ export function calculateFullAssessment(params: {
 
   const eA = effectiveFactors.market_access;
   const eB = effectiveFactors.cost_to_implement;
+  const eC = effectiveFactors.human_resources;
   const eD = effectiveFactors.urgency;
 
   const allSourceBlank =
@@ -381,7 +385,7 @@ export function calculateFullAssessment(params: {
   const hasOverridesForABC =
     overrides.some(
       (o) =>
-        ["market_access", "cost_to_implement"].includes(o.target) &&
+        ["market_access", "cost_to_implement", "human_resources"].includes(o.target) &&
         o.ended_at === null &&
         (o.expires_at === null || isAfter(o.expires_at, new Date()))
     );
@@ -395,7 +399,7 @@ export function calculateFullAssessment(params: {
 
   const isUnscored = allSourceBlank && !hasOverridesForABC && !totalOverride;
 
-  const allFactorsPresent = eA !== null && eB !== null && eD !== null;
+  const allFactorsPresent = eA !== null && eB !== null && eC !== null && eD !== null;
 
   let rawTotal: number | null = null;
   let rawBand: Band | null = null;
@@ -403,8 +407,8 @@ export function calculateFullAssessment(params: {
   let baseBand: Band | null = null;
 
   if (allFactorsPresent && !(allSourceBlank && !hasOverridesForABC)) {
-    // Total = Market access × Cost to implement × Urgency (1–729)
-    rawTotal = eA! * eB! * eD!;
+    // Total (v2) = Market access × Cost to implement × Human resources × Urgency (1–6,561)
+    rawTotal = eA! * eB! * eC! * eD!;
     rawBand = calculateBand(rawTotal, policy);
     effectiveTotal = rawTotal;
     baseBand = rawBand;
@@ -443,8 +447,8 @@ export function calculateFullAssessment(params: {
   }
 
   const signatureInputs = {
-    eA, eB, eD,
-    formula: "A*B*D",
+    eA, eB, eC, eD,
+    formula: "A*B*C*D",
     deadline: deadline?.date_value?.toISOString() ?? null,
     deadlineKind: deadline?.kind ?? null,
     deadlineVerification: deadline?.verification_state ?? null,

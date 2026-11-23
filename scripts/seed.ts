@@ -9,7 +9,7 @@ const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL || "postgresql://komatsu:komatsu_dev_2024@127.0.0.1:5432/komatsu_dev",
 });
 
-// Market access × Cost to implement × Urgency (1–729); see src/lib/scoring/policy.ts
+// v2: Market access × Cost to implement × Human resources × Urgency (1–6,561); see src/lib/scoring/policy.ts
 const SCORING_POLICY = DEFAULT_POLICY;
 
 

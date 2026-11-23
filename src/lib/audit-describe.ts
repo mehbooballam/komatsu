@@ -69,7 +69,7 @@ const WORDS: Record<string, string> = {
   market_access: "Market access",
   cost_to_implement: "Cost to implement",
   urgency: "Urgency",
-  human_resources: "Additional people",
+  human_resources: "Human resources",
   total: "Total score",
   compliance: "Compliance",
   verified: "Confirmed",

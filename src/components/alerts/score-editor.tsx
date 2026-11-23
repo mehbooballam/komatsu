@@ -146,7 +146,7 @@ export function ScoreEditor({
               <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">New total</span>
               <div className="text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{previewTotal?.toLocaleString() ?? "—"}</div>
               {useTotal && factorTotal != null && previewTotal !== factorTotal && (
-                <div className="text-xs text-slate-500">Calculated A × B × C would be {factorTotal.toLocaleString()}</div>
+                <div className="text-xs text-slate-500">Calculated A × B × C × D would be {factorTotal.toLocaleString()}</div>
               )}
             </div>
             <span className={`rounded-full px-3 py-1 text-sm font-semibold capitalize ring-1 ${BAND_CHIP[previewBand]}`}>{previewBand}</span>
@@ -216,7 +216,7 @@ export function ScoreEditor({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">Override total score</p>
-                <p className="text-xs text-slate-500">Replace Market access × Cost to implement × Urgency with your own total (1 – {MAX_TOTAL.toLocaleString()})</p>
+                <p className="text-xs text-slate-500">Replace Market access × Cost to implement × Human resources × Urgency with your own total (1 – {MAX_TOTAL.toLocaleString()})</p>
               </div>
               {policy.total_override_enabled ? (
                 <button

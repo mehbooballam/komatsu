@@ -224,7 +224,8 @@ const BAND_STYLE: Record<string, { chip: string; bar: string; label: string }> =
 const FACTORS = [
   { key: "market_access", label: "Market access", letter: "A" },
   { key: "cost_to_implement", label: "Cost to implement", letter: "B" },
-  { key: "urgency", label: "Urgency", letter: "C" },
+  { key: "human_resources", label: "Human resources", letter: "C" },
+  { key: "urgency", label: "Urgency", letter: "D" },
 ] as const;
 
 function formatDate(d: string | null | undefined) {
@@ -1225,7 +1226,7 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
             {activeTab === "scoring" && (
               <>
                 <Section title="Factor ratings" icon={SlidersHorizontal}>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
                     {FACTORS.map((f) => {
                       const sf = scoreFactors[f.key];
                       return (
@@ -1253,9 +1254,9 @@ export function AlertDrawer({ alertId, onClose, userRole: roleProp, onChanged, i
                   <div className="mt-3 flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm dark:bg-slate-800/60">
                     <span className="text-slate-500">
                       {totalOverride ? (
-                        <>Total set manually <span className="text-xs">(A × B × C = {data.assessment?.raw_total ?? "—"})</span></>
+                        <>Total set manually <span className="text-xs">(A × B × C × D = {data.assessment?.raw_total ?? "—"})</span></>
                       ) : (
-                        "Market access × Cost × Urgency"
+                        "Market access × Cost × Human resources × Urgency"
                       )}
                     </span>
                     <span className={`font-bold tabular-nums ${totalOverride ? "text-blue-600" : ""}`}>{data.assessment?.effective_total ?? "—"}</span>

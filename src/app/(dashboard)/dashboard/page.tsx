@@ -210,8 +210,8 @@ function ConcentrationFormula({ data }: { data: ParetoData }) {
       <ol className="mt-2 list-decimal space-y-1 pl-5 text-slate-600 dark:text-slate-300">
         <li>
           Each <strong className="text-slate-800 dark:text-slate-100">bar</strong> is one alert’s final risk score:{" "}
-          <span className="whitespace-nowrap font-mono text-[12px] text-slate-800 dark:text-slate-200">Market access × Cost × Urgency</span>{" "}
-          (1–729, including any manual adjustment). Alerts are sorted from highest to lowest.
+          <span className="whitespace-nowrap font-mono text-[12px] text-slate-800 dark:text-slate-200">Market access × Cost × Human resources × Urgency</span>{" "}
+          (1–6,561, including any manual adjustment). Alerts are sorted from highest to lowest.
         </li>
         <li>
           The <strong className="text-slate-800 dark:text-slate-100">line</strong> is the running share of all risk:

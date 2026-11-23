@@ -9,7 +9,7 @@ import { useSessionInfo, useRefreshSession } from "@/components/layout/session-c
 import { ImageUpload } from "@/components/ui/image-upload";
 import { ConfirmDialog } from "@/components/alerts/confirm-dialog";
 import {
-  BANDS, FACTOR_KEYS, FACTOR_LABELS, MAX_TOTAL, RATING_VALUES,
+  BANDS, FACTOR_KEYS, FACTOR_LABELS, FORMULA_TEXT, MAX_TOTAL, RATING_VALUES,
   bandForTotal, escalationText, factorEscalations, maxBand, validatePolicy,
   type Band, type EscalationRule, type FactorKey, type ScoringPolicy,
 } from "@/lib/scoring/policy";
@@ -29,7 +29,8 @@ const TIME_ZONES = [
 
 const RULE_TITLES: Record<EscalationRule["condition"], string> = {
   market_access_9: "High market access sets a minimum priority",
-  urgency_9_and_market_access_gte_6: "Urgent and significant market access",
+  urgency_9: "Very urgent alerts",
+  urgency_9_and_market_access_gte_6: "Very high market access and significant urgency",
   forecast_missed_deadline: "Missed or overdue compliance deadline",
 };
 
@@ -132,7 +133,7 @@ function ScoringPolicyEditor() {
   const [saved, setSaved] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reason, setReason] = useState("");
-  const [calc, setCalc] = useState<Record<FactorKey, number>>({ market_access: 6, cost_to_implement: 1, urgency: 9 });
+  const [calc, setCalc] = useState<Record<FactorKey, number>>({ market_access: 6, cost_to_implement: 3, human_resources: 1, urgency: 6 });
 
   const load = useCallback(async () => {
     const res = await fetch("/api/scoring/policy");
@@ -195,7 +196,7 @@ function ScoringPolicyEditor() {
     });
 
   // Calculator
-  const total = calc.market_access * calc.cost_to_implement * calc.urgency;
+  const total = calc.market_access * calc.cost_to_implement * calc.human_resources * calc.urgency;
   const base = bandForTotal(total, draft);
   const escalations = factorEscalations({ market_access: calc.market_access, urgency: calc.urgency }, draft);
   const finalBand = escalations.reduce<Band | null>((b, e) => maxBand(b, e.resulting_band), base) || base;
@@ -270,7 +271,7 @@ function ScoringPolicyEditor() {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">
           {/* Bands */}
-          <Section title="Risk bands" subtitle="Total score = Market access × Cost to implement × Urgency (1 – 729). Set where each priority starts." icon={SlidersHorizontal}>
+          <Section title="Risk bands" subtitle={`Total score = ${FORMULA_TEXT} (1 – ${MAX_TOTAL.toLocaleString()}). Set where each priority starts.`} icon={SlidersHorizontal}>
             <div className="mb-5 flex h-3 overflow-hidden rounded-full">
               {BANDS.map((b) => (
                 <div key={b} style={{ width: `${(logW(b) / totalW) * 100}%`, backgroundColor: BAND_STYLE[b].color }} title={`${BAND_STYLE[b].label}: ${draft.bands[b][0]}–${draft.bands[b][1]}`} />
@@ -329,15 +330,21 @@ function ScoringPolicyEditor() {
                         <RatingSelect value={rule.params?.market_access ?? 9} disabled={readOnly || !rule.enabled} onChange={(v) => set((p) => { p.escalations[i].params = { ...p.escalations[i].params, market_access: v }; })} />
                       </label>
                     )}
+                    {rule.condition === "urgency_9" && (
+                      <label className="flex items-center gap-2">
+                        <span className="text-slate-600 dark:text-slate-400">When urgency ≥</span>
+                        <RatingSelect value={rule.params?.urgency ?? 9} disabled={readOnly || !rule.enabled} onChange={(v) => set((p) => { p.escalations[i].params = { ...p.escalations[i].params, urgency: v }; })} />
+                      </label>
+                    )}
                     {rule.condition === "urgency_9_and_market_access_gte_6" && (
                       <>
                         <label className="flex items-center gap-2">
-                          <span className="text-slate-600 dark:text-slate-400">Urgency ≥</span>
-                          <RatingSelect value={rule.params?.urgency ?? 9} disabled={readOnly || !rule.enabled} onChange={(v) => set((p) => { p.escalations[i].params = { ...p.escalations[i].params, urgency: v }; })} />
+                          <span className="text-slate-600 dark:text-slate-400">Market access ≥</span>
+                          <RatingSelect value={rule.params?.market_access ?? 9} disabled={readOnly || !rule.enabled} onChange={(v) => set((p) => { p.escalations[i].params = { ...p.escalations[i].params, market_access: v }; })} />
                         </label>
                         <label className="flex items-center gap-2">
-                          <span className="text-slate-600 dark:text-slate-400">and market access ≥</span>
-                          <RatingSelect value={rule.params?.market_access ?? 6} disabled={readOnly || !rule.enabled} onChange={(v) => set((p) => { p.escalations[i].params = { ...p.escalations[i].params, market_access: v }; })} />
+                          <span className="text-slate-600 dark:text-slate-400">and urgency ≥</span>
+                          <RatingSelect value={rule.params?.urgency ?? 6} disabled={readOnly || !rule.enabled} onChange={(v) => set((p) => { p.escalations[i].params = { ...p.escalations[i].params, urgency: v }; })} />
                         </label>
                       </>
                     )}
@@ -384,7 +391,7 @@ function ScoringPolicyEditor() {
               </table>
             </div>
             <p className="mt-3 text-xs text-[var(--muted-foreground)]">
-              Urgency (C) is calculated from the confirmed compliance deadline when there is one; otherwise the imported rating is used.
+              Urgency (D) is calculated from the confirmed compliance deadline when there is one; otherwise the imported rating is used.
             </p>
           </Section>
         </div>
@@ -394,7 +401,7 @@ function ScoringPolicyEditor() {
           <Section title="Total score override" subtitle="Let reviewers set an alert's total score directly" icon={SlidersHorizontal}>
             <div className="flex items-start justify-between gap-4">
               <p className="text-sm text-slate-600 dark:text-slate-400">
-                When on, the <strong>Adjust score</strong> panel lets reviewers replace the calculated Market access × Cost to implement × Urgency total with their own number (1 – 729), with a reason. The priority band follows the new total; escalation rules still apply.
+                When on, the <strong>Adjust score</strong> panel lets reviewers replace the calculated {FORMULA_TEXT} total with their own number (1 – {MAX_TOTAL.toLocaleString()}), with a reason. The priority band follows the new total; escalation rules still apply.
               </p>
               <Toggle checked={draft.total_override_enabled} disabled={readOnly} label="Allow total score override" onChange={(v) => set((p) => { p.total_override_enabled = v; })} />
             </div>

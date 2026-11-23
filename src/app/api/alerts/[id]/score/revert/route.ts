@@ -8,6 +8,7 @@ import { addChangeNotes, commentRequired, readChangeComment } from "@/lib/change
 const TARGETS: Record<string, string> = {
   market_access: "Market access",
   cost_to_implement: "Cost to implement",
+  human_resources: "Human resources",
   urgency: "Urgency",
   total: "Total score",
 };

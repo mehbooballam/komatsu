@@ -4,23 +4,36 @@
  */
 
 export type Band = "low" | "moderate" | "high" | "critical";
-/** Scoring factors. Total = Market access × Cost to implement × Urgency (1–729).
- *  "Additional people" (human_resources) is no longer scored; imported values are kept only as history. */
-export type FactorKey = "market_access" | "cost_to_implement" | "urgency";
+/** Scoring factors (v2). Total = Market access × Cost to implement × Human resources × Urgency (1–6,561).
+ *  An alert without a Human resources rating counts it as 1. */
+export type FactorKey = "market_access" | "cost_to_implement" | "human_resources" | "urgency";
 
 export const BANDS: Band[] = ["low", "moderate", "high", "critical"];
-export const FACTOR_KEYS: FactorKey[] = ["market_access", "cost_to_implement", "urgency"];
+export const FACTOR_KEYS: FactorKey[] = ["market_access", "cost_to_implement", "human_resources", "urgency"];
 export const RATING_VALUES = [1, 3, 6, 9] as const;
-export const MAX_TOTAL = 9 * 9 * 9; // 729
-export const FORMULA_TEXT = "Market access × Cost to implement × Urgency";
+export const MAX_TOTAL = 9 * 9 * 9 * 9; // 6,561
+export const FORMULA_TEXT = "Market access × Cost to implement × Human resources × Urgency";
+/** Value used for Human resources when an alert has no rating (neutral in the product). */
+export const MISSING_HUMAN_RESOURCES = 1;
+/** Human resources obligation points (v2): sum the points of every obligation that applies. */
+export const HR_OBLIGATION_POINTS: Array<{ label: string; points: number }> = [
+  { label: "Reporting", points: 1 },
+  { label: "Labelling", points: 1 },
+  { label: "Product documentation", points: 2 },
+  { label: "Supplier data", points: 3 },
+  { label: "Registration / certification", points: 3 },
+  { label: "Third-party testing", points: 4 },
+  { label: "Product redesign", points: 5 },
+];
 
 export const FACTOR_LABELS: Record<FactorKey, string> = {
   market_access: "Market access (A)",
   cost_to_implement: "Cost to implement (B)",
-  urgency: "Urgency (C)",
+  human_resources: "Human resources (C)",
+  urgency: "Urgency (D)",
 };
 
-export type EscalationCondition = "market_access_9" | "urgency_9_and_market_access_gte_6" | "forecast_missed_deadline";
+export type EscalationCondition = "market_access_9" | "urgency_9" | "urgency_9_and_market_access_gte_6" | "forecast_missed_deadline";
 
 export interface EscalationRule {
   condition: EscalationCondition;
@@ -28,7 +41,8 @@ export interface EscalationRule {
   /** Band the alert is raised to (at least). */
   band: Band;
   description: string;
-  /** Rule parameters (only the ones that apply to the condition are used). */
+  /** Rule parameters (only the ones that apply to the condition are used).
+   *  urgency_9_and_market_access_gte_6 is the combined rule: urgency ≥ params.urgency AND market access ≥ params.market_access. */
   params?: { market_access?: number; urgency?: number };
 }
 
@@ -62,6 +76,15 @@ export const DEFAULT_POLICY: ScoringPolicy = {
         "9": "Over USD 1,000,000",
       },
     },
+    human_resources: {
+      allowed_values: [1, 3, 6, 9],
+      boundaries: {
+        "1": "0–3 obligation points",
+        "3": "4–7 obligation points",
+        "6": "8–12 obligation points",
+        "9": "More than 12 obligation points",
+      },
+    },
     urgency: {
       allowed_values: [1, 3, 6, 9],
       boundaries: {
@@ -74,10 +97,11 @@ export const DEFAULT_POLICY: ScoringPolicy = {
     },
   },
   bands: {
-    low: [1, 26], // 3×3×3 = 27 starts Moderate
-    moderate: [27, 107], // 6×6×3 = 108 starts High
-    high: [108, 242], // 9×9×3 = 243 starts Critical
-    critical: [243, MAX_TOTAL],
+    // v2 bands
+    low: [1, 80],
+    moderate: [81, 500],
+    high: [501, 2000],
+    critical: [2001, MAX_TOTAL],
   },
   escalations: [
     {
@@ -88,11 +112,18 @@ export const DEFAULT_POLICY: ScoringPolicy = {
       description: "Market access at or above the threshold gives at least this priority",
     },
     {
+      condition: "urgency_9",
+      enabled: true,
+      band: "critical",
+      params: { urgency: 9 },
+      description: "Urgency at or above the threshold gives this priority",
+    },
+    {
       condition: "urgency_9_and_market_access_gte_6",
       enabled: true,
       band: "critical",
-      params: { urgency: 9, market_access: 6 },
-      description: "High urgency combined with significant market access gives this priority",
+      params: { market_access: 9, urgency: 6 },
+      description: "Very high market access combined with significant urgency gives this priority",
     },
     {
       condition: "forecast_missed_deadline",
@@ -128,10 +159,14 @@ export function normalizePolicy(raw: unknown): ScoringPolicy {
   }
 
   const bands = { ...DEFAULT_POLICY.bands };
-  for (const b of BANDS) {
-    const v = p.bands?.[b];
-    if (Array.isArray(v) && v.length === 2 && v.every((n) => Number.isFinite(Number(n)))) {
-      bands[b] = [Number(v[0]), Number(v[1])];
+  // Bands saved for the earlier three-factor model (ending at 729) don't fit the v2 range: use the v2 defaults
+  const storedMax = Array.isArray(p.bands?.critical) ? Number(p.bands.critical[1]) : MAX_TOTAL;
+  if (storedMax === MAX_TOTAL) {
+    for (const b of BANDS) {
+      const v = p.bands?.[b];
+      if (Array.isArray(v) && v.length === 2 && v.every((n) => Number.isFinite(Number(n)))) {
+        bands[b] = [Number(v[0]), Number(v[1])];
+      }
     }
   }
 
@@ -210,8 +245,10 @@ export function escalationText(rule: EscalationRule): string {
   switch (rule.condition) {
     case "market_access_9":
       return `Market access ≥ ${rule.params?.market_access ?? 9} → at least ${band}`;
+    case "urgency_9":
+      return `Urgency ≥ ${rule.params?.urgency ?? 9} → ${band}`;
     case "urgency_9_and_market_access_gte_6":
-      return `Urgency ≥ ${rule.params?.urgency ?? 9} and market access ≥ ${rule.params?.market_access ?? 6} → ${band}`;
+      return `Market access ≥ ${rule.params?.market_access ?? 9} and urgency ≥ ${rule.params?.urgency ?? 6} → ${band}`;
     case "forecast_missed_deadline":
       return `Missed or overdue confirmed compliance deadline → ${band}`;
   }
@@ -230,9 +267,14 @@ export function factorEscalations(
       if (factors.market_access !== null && factors.market_access >= t) {
         out.push({ condition: rule.condition, description: escalationText(rule), resulting_band: rule.band });
       }
-    } else if (rule.condition === "urgency_9_and_market_access_gte_6") {
+    } else if (rule.condition === "urgency_9") {
       const u = rule.params?.urgency ?? 9;
-      const m = rule.params?.market_access ?? 6;
+      if (factors.urgency !== null && factors.urgency >= u) {
+        out.push({ condition: rule.condition, description: escalationText(rule), resulting_band: rule.band });
+      }
+    } else if (rule.condition === "urgency_9_and_market_access_gte_6") {
+      const u = rule.params?.urgency ?? 6;
+      const m = rule.params?.market_access ?? 9;
       if (factors.urgency !== null && factors.urgency >= u && factors.market_access !== null && factors.market_access >= m) {
         out.push({ condition: rule.condition, description: escalationText(rule), resulting_band: rule.band });
       }

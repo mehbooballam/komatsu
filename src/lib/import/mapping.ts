@@ -6,6 +6,7 @@ import {
   IMPORT_COLUMNS,
   LEGACY_COLUMNS,
   NOT_IMPORTED,
+  isV1WasColumn,
   aliasTarget,
   normalizeHeader,
   type ImportColumnName,
@@ -211,7 +212,8 @@ export function mappingTargets() {
 /** Why a header is not mapped automatically, when there is a reason worth showing. */
 export function skipReason(header: string): string | null {
   const t = aliasTarget(header);
-  if (t && NOT_IMPORTED.has(t)) return "Not imported for now (Human Resources is not part of the score yet)";
+  if (isV1WasColumn(header)) return "Old v1 snapshot column — not imported";
+  if (t && NOT_IMPORTED.has(t)) return "Not imported";
   return null;
 }
 

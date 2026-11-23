@@ -49,15 +49,15 @@ export const IMPORT_COLUMNS = [
 export type ImportColumnName = (typeof IMPORT_COLUMNS)[number];
 
 /**
- * Columns the app knows but does not import for now (Human Resources is not part
- * of the score yet). Their headers are ignored in uploaded files and left out of
- * the templates; the database columns stay so they can be switched back on.
+ * Columns the app knows but does not import. Empty since v2 scoring, where Human Resources
+ * is a scored factor again; kept so a column can be switched off without removing it.
  */
-export const NOT_IMPORTED = new Set<ImportColumnName>([
-  "human_resources",
-  "human_resources_rationale",
-  "human_resources_confidence",
-]);
+export const NOT_IMPORTED = new Set<ImportColumnName>([]);
+
+/** v1 snapshot columns ("Was Priority Level", "Was Escalation Applied", "Was Source Context"): never imported. */
+export function isV1WasColumn(raw: string): boolean {
+  return /^was/i.test(raw.trim());
+}
 
 /** Older layout columns: still read when a file has them, but not in the templates. */
 export const LEGACY_COLUMNS = new Set<ImportColumnName>(["deadline_description", "relevance"]);
@@ -130,16 +130,16 @@ export const COLUMN_DEFS: ColumnDef[] = [
   { name: "change_type", label: "Change Type", type: "text", required: false, description: "Source change classification." },
   { name: "market_access_risk", label: "Market Access Risk", type: "integer", required: false, description: "Imported market-access rating (1, 3, 6, or 9)." },
   { name: "cost_to_implement", label: "Cost to Implement", type: "integer", required: false, description: "Imported implementation-cost rating (1, 3, 6, or 9)." },
-  { name: "human_resources", label: "Human Resources (legacy)", type: "integer", required: false, description: "Legacy people rating. Optional — kept in upload history, not used in the score." },
+  { name: "human_resources", label: "Human Resources", type: "integer", required: false, description: "Imported human-resources rating (1, 3, 6, or 9) from obligation points. Blank counts as 1." },
   { name: "urgency", label: "Urgency", type: "integer", required: false, description: "Imported urgency snapshot." },
   { name: "overall_impact_score", label: "Overall Impact Score", type: "integer", required: false, description: "Imported total snapshot." },
   { name: "market_access_risk_rationale", label: "Market Access Risk Rationale", type: "text", required: false, description: "Imported market-access explanation." },
   { name: "cost_to_implement_rationale", label: "Cost to Implement Rationale", type: "text", required: false, description: "Imported implementation-cost explanation." },
-  { name: "human_resources_rationale", label: "Human Resources Rationale", type: "text", required: false, description: "Imported people explanation." },
+  { name: "human_resources_rationale", label: "Human Resources Rationale", type: "text", required: false, description: "Imported human-resources explanation (obligation points)." },
   { name: "urgency_rationale", label: "Urgency Rationale", type: "text", required: false, description: "Imported urgency explanation." },
   { name: "market_access_risk_confidence", label: "Market Access Risk Confidence", type: "text", required: false, description: "How sure the source is of the market-access rating: High / Medium / Low, or a percentage (85%, 0.85)." },
   { name: "cost_to_implement_confidence", label: "Cost to Implement Confidence", type: "text", required: false, description: "How sure the source is of the implementation-cost rating: High / Medium / Low, or a percentage." },
-  { name: "human_resources_confidence", label: "Human Resources Confidence (legacy)", type: "text", required: false, description: "Legacy people-rating confidence. Optional." },
+  { name: "human_resources_confidence", label: "Human Resources Confidence", type: "text", required: false, description: "How sure the source is of the human-resources rating: High / Medium / Low, or a percentage." },
   { name: "urgency_confidence", label: "Urgency Confidence", type: "text", required: false, description: "How sure the source is of the urgency rating: High / Medium / Low, or a percentage." },
   { name: "needs_human_review", label: "Needs Human Review", type: "boolean", required: false, description: "Yes/No (also True/False, Y/N, 1/0). Yes marks the alert Needs review until a person clears it. Any other text also flags it and is kept as the reason." },
 ];
@@ -299,6 +299,7 @@ export function normalizeHeader(raw: string): ImportColumnName | null {
     .trim()
     .replace(/[\r\n]+/g, " ")
     .replace(/\s+/g, " ");
+  if (isV1WasColumn(cleaned)) return null;
   const mapped = HEADER_ALIASES.get(cleaned) ?? null;
   return mapped && !NOT_IMPORTED.has(mapped) ? mapped : null;
 }
@@ -374,18 +375,18 @@ export const COLUMN_STORAGE: Record<ImportColumnName, string> = {
   source_context_details: "alerts.source_context_details",
   market_access_risk: "source_factor_ratings (market_access) → risk score A",
   cost_to_implement: "source_factor_ratings (cost_to_implement) → risk score B",
-  human_resources: "source_factor_ratings (human_resources) — not imported for now",
+  human_resources: "source_factor_ratings (human_resources)",
   urgency: "source_factor_ratings (urgency) → risk score C",
-  overall_impact_score: "Kept in the source revision only — the score is calculated (A × B × C)",
+  overall_impact_score: "Kept in the source revision only — the score is calculated (A × B × C × D)",
   needs_human_review: "alerts.human_review_required (Needs review flag)",
   compliance_deadline: "alert_deadlines (unconfirmed deadline)",
   market_access_risk_rationale: "source_factor_ratings.rationale (market_access)",
   cost_to_implement_rationale: "source_factor_ratings.rationale (cost_to_implement)",
-  human_resources_rationale: "source_factor_ratings.rationale (human_resources) — not imported for now",
+  human_resources_rationale: "source_factor_ratings.rationale (human_resources)",
   urgency_rationale: "source_factor_ratings.rationale (urgency)",
   market_access_risk_confidence: "source_factor_ratings.confidence (market_access)",
   cost_to_implement_confidence: "source_factor_ratings.confidence (cost_to_implement)",
-  human_resources_confidence: "source_factor_ratings.confidence (human_resources) — not imported for now",
+  human_resources_confidence: "source_factor_ratings.confidence (human_resources)",
   urgency_confidence: "source_factor_ratings.confidence (urgency)",
   deadline_description: "Kept in the source revision (older layout)",
   relevance: "alerts.relevance (older layout)",
