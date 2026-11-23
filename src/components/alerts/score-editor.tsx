@@ -67,8 +67,8 @@ const ALLOWED_VALUES = [1, 3, 6, 9];
 
 function calculateBand(total: number): string {
   if (total <= 80) return "low";
-  if (total <= 323) return "moderate";
-  if (total <= 1295) return "high";
+  if (total <= 500) return "moderate";
+  if (total <= 2000) return "high";
   return "critical";
 }
 
@@ -77,7 +77,8 @@ function getEscalations(factors: Record<string, number | null>): string[] {
   const a = factors.market_access;
   const d = factors.urgency;
   if (a === 9) reasons.push("Market access = 9 → minimum High");
-  if (d === 9 && a != null && a >= 6) reasons.push("Urgency = 9 AND Market access ≥ 6 → Critical");
+  if (d === 9) reasons.push("Urgency = 9 → Critical");
+  if (a === 9 && d != null && d >= 6) reasons.push("Market access = 9 AND Urgency ≥ 6 → Critical");
   return reasons;
 }
 
@@ -86,7 +87,8 @@ function getEffectiveBand(total: number | null, factors: Record<string, number |
   let band = calculateBand(total);
   const bandOrder: Record<string, number> = { low: 0, moderate: 1, high: 2, critical: 3 };
   if (factors.market_access === 9 && bandOrder[band] < bandOrder.high) band = "high";
-  if (factors.urgency === 9 && factors.market_access != null && factors.market_access >= 6) band = "critical";
+  if (factors.urgency === 9) band = "critical";
+  if (factors.market_access === 9 && factors.urgency != null && factors.urgency >= 6) band = "critical";
   return band;
 }
 

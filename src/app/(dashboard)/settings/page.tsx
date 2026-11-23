@@ -153,9 +153,9 @@ export default function SettingsPage() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {[
                       { label: "Low", range: "1–80", color: "var(--priority-low)" },
-                      { label: "Moderate", range: "81–323", color: "var(--priority-moderate)" },
-                      { label: "High", range: "324–1,295", color: "var(--priority-high)" },
-                      { label: "Critical", range: "1,296–6,561", color: "var(--priority-critical)" },
+                      { label: "Moderate", range: "81–500", color: "var(--priority-moderate)" },
+                      { label: "High", range: "501–2,000", color: "var(--priority-high)" },
+                      { label: "Critical", range: "2,001–6,561", color: "var(--priority-critical)" },
                     ].map((band) => (
                       <div key={band.label} className="border rounded-lg p-3 text-center">
                         <div className="w-3 h-3 rounded-full mx-auto mb-2" style={{ backgroundColor: band.color }} />
@@ -175,7 +175,11 @@ export default function SettingsPage() {
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="w-1.5 h-1.5 rounded-full bg-[var(--priority-critical)] mt-1.5 shrink-0" />
-                      Urgency = 9 and Market access ≥ 6 gives <strong>Critical</strong>
+                      Urgency = 9 gives <strong>Critical</strong>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--priority-critical)] mt-1.5 shrink-0" />
+                      Market access = 9 and Urgency ≥ 6 gives <strong>Critical</strong>
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="w-1.5 h-1.5 rounded-full bg-[var(--priority-critical)] mt-1.5 shrink-0" />

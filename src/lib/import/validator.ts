@@ -1,6 +1,9 @@
 import {
   VALID_RATINGS,
+  VALID_CONFIDENCE,
   FACTOR_COLUMNS,
+  CONFIDENCE_COLUMNS,
+  DETAIL_COLUMNS,
   PLACEHOLDER_RATIONALE_PATTERN,
   type ImportColumnName,
 } from "./constants";
@@ -232,6 +235,33 @@ export function validateRows(rows: ParsedRow[]): ValidationResult {
     parsed.urgency_rationale = cleanRationale(
       row.mapped.urgency_rationale ?? null
     );
+
+    for (const [, confCol] of Object.entries(CONFIDENCE_COLUMNS)) {
+      const rawConf = row.mapped[confCol];
+      if (rawConf) {
+        const normalized = rawConf.trim().toLowerCase();
+        if (VALID_CONFIDENCE.has(normalized)) {
+          parsed[confCol] = rawConf.trim();
+        } else {
+          warnings.push({
+            field: confCol,
+            message: `Non-standard confidence value: "${rawConf}" (expected High, Medium, or Low)`,
+            severity: "warning",
+          });
+          parsed[confCol] = rawConf.trim();
+        }
+      }
+    }
+
+    if (row.mapped.needs_human_review) {
+      parsed.needs_human_review = row.mapped.needs_human_review;
+    }
+
+    for (const col of DETAIL_COLUMNS) {
+      if (row.mapped[col]) {
+        parsed[col] = row.mapped[col];
+      }
+    }
 
     for (const err of errors) {
       fieldErrors[err.field] = (fieldErrors[err.field] || 0) + 1;

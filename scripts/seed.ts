@@ -50,9 +50,9 @@ const SCORING_POLICY: object = {
   },
   bands: {
     low: [1, 80],
-    moderate: [81, 323],
-    high: [324, 1295],
-    critical: [1296, 6561],
+    moderate: [81, 500],
+    high: [501, 2000],
+    critical: [2001, 6561],
   },
   escalations: [
     {
@@ -61,9 +61,14 @@ const SCORING_POLICY: object = {
       description: "Market access = 9 gives minimum High",
     },
     {
-      condition: "urgency_9_and_market_access_gte_6",
+      condition: "urgency_9",
       band: "critical",
-      description: "Urgency = 9 and Market access >= 6 gives Critical",
+      description: "Urgency = 9 gives Critical",
+    },
+    {
+      condition: "market_access_9_and_urgency_gte_6",
+      band: "critical",
+      description: "Market access = 9 and Urgency >= 6 gives Critical",
     },
     {
       condition: "forecast_missed_deadline",

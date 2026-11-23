@@ -4,6 +4,7 @@ import {
   RECOMMENDATION_MAP,
   FACTOR_KEY_MAP,
   RATIONALE_COLUMNS,
+  CONFIDENCE_COLUMNS,
   FACTOR_COLUMNS,
   type ImportColumnName,
 } from "./constants";
@@ -162,8 +163,8 @@ async function createAlert(
        company_id, feed_id, external_alert_id, title, overview, summary, relevance,
        published_on, stage, recommendation, change_type, timing_raw, product_raw,
        jurisdiction_raw, agency_name, source_name, source_url, topic_match,
-       provider_review_state, local_state
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'new')
+       provider_review_state, local_state, needs_human_review
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'new',$20)
      RETURNING id`,
     [
       companyId,
@@ -185,6 +186,7 @@ async function createAlert(
       p.link || null,
       Array.isArray(p.topic_match) ? (p.topic_match as string[]).join(" | ") : (p.topic_match as string) || null,
       mapRecommendation(p.category_algorithm_defined as string | null),
+      p.needs_human_review || null,
     ]
   );
 
@@ -221,12 +223,14 @@ async function createAlert(
     const factorKey = FACTOR_KEY_MAP[col];
     const rationaleCol = RATIONALE_COLUMNS[factorKey];
     const rationale = p[rationaleCol] as string | null | undefined;
+    const confidenceCol = CONFIDENCE_COLUMNS[factorKey];
+    const confidence = confidenceCol ? (p[confidenceCol] as string | null | undefined) : null;
 
     if (rawVal !== null && rawVal !== undefined) {
       await client.query(
-        `INSERT INTO source_factor_ratings (company_id, alert_source_revision_id, factor_key, original_value, parsed_value, rationale)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [companyId, revisionId, factorKey, rawVal, parsedVal ?? null, rationale ?? null]
+        `INSERT INTO source_factor_ratings (company_id, alert_source_revision_id, factor_key, original_value, parsed_value, rationale, confidence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [companyId, revisionId, factorKey, rawVal, parsedVal ?? null, rationale ?? null, confidence ?? null]
       );
     }
   }
@@ -249,6 +253,8 @@ async function createAlert(
       );
     }
   }
+
+  await extractHrObligationTags(client, companyId, newAlertId, p);
 
   await client.query(
     `INSERT INTO alert_active_projections (company_id, alert_id, is_active)
@@ -367,6 +373,15 @@ async function updateAlert(
     paramIdx++;
   }
 
+  if (row.presentColumns.has("needs_human_review")) {
+    const val = p.needs_human_review as string | null | undefined;
+    if (val || updateMode === "replace") {
+      sourceUpdates.push(`needs_human_review = $${paramIdx}`);
+      sourceValues.push(val ?? null);
+      paramIdx++;
+    }
+  }
+
   sourceUpdates.push(`current_source_revision_id = $${paramIdx}`);
   sourceValues.push(revisionId);
   paramIdx++;
@@ -385,15 +400,19 @@ async function updateAlert(
     const factorKey = FACTOR_KEY_MAP[col];
     const rationaleCol = RATIONALE_COLUMNS[factorKey];
     const rationale = p[rationaleCol] as string | null | undefined;
+    const confidenceCol = CONFIDENCE_COLUMNS[factorKey];
+    const confidence = confidenceCol ? (p[confidenceCol] as string | null | undefined) : null;
 
     if (rawVal !== null && rawVal !== undefined) {
       await client.query(
-        `INSERT INTO source_factor_ratings (company_id, alert_source_revision_id, factor_key, original_value, parsed_value, rationale)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [companyId, revisionId, factorKey, rawVal, parsedVal ?? null, rationale ?? null]
+        `INSERT INTO source_factor_ratings (company_id, alert_source_revision_id, factor_key, original_value, parsed_value, rationale, confidence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [companyId, revisionId, factorKey, rawVal, parsedVal ?? null, rationale ?? null, confidence ?? null]
       );
     }
   }
+
+  await extractHrObligationTags(client, companyId, alertId, p);
 
   if (p.deadline_date && typeof p.deadline_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.deadline_date)) {
     const existingDeadline = await client.query(
@@ -425,4 +444,43 @@ async function updateAlert(
      VALUES ($1, 'import', 'alert_updated', 'alert', $2, $3)`,
     [companyId, alertId, JSON.stringify({ source_revision: nextVersion, row_hash: rowHash })]
   );
+}
+
+const HR_OBLIGATION_PATTERN = /\b(reporting|labelling|product documentation|supplier data|registration|certification|third[- ]party testing|product redesign)\b/gi;
+
+async function extractHrObligationTags(
+  client: Awaited<ReturnType<typeof getClient>>,
+  companyId: string,
+  alertId: string,
+  parsed: Partial<Record<ImportColumnName, unknown>>
+): Promise<void> {
+  const rationale = parsed.human_resources_rationale as string | null | undefined;
+  if (!rationale) return;
+
+  const matches = rationale.match(HR_OBLIGATION_PATTERN);
+  if (!matches || matches.length === 0) return;
+
+  const seen = new Set<string>();
+  for (const raw of matches) {
+    const name = raw.trim();
+    const normalized = name.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+
+    const tagResult = await client.query(
+      `INSERT INTO tag_labels (company_id, name, normalized_name, color)
+       VALUES ($1, $2, $3, '#8b5cf6')
+       ON CONFLICT (company_id, normalized_name) DO UPDATE SET name = EXCLUDED.name
+       RETURNING id`,
+      [companyId, `HR: ${name}`, `hr_${normalized}`]
+    );
+    const tagId = tagResult.rows[0].id;
+
+    await client.query(
+      `INSERT INTO alert_tags (company_id, alert_id, tag_id, origin)
+       VALUES ($1, $2, $3, 'import')
+       ON CONFLICT (alert_id, tag_id) DO NOTHING`,
+      [companyId, alertId, tagId]
+    );
+  }
 }

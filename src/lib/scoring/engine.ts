@@ -92,8 +92,8 @@ function maxBand(a: Band | null, b: Band | null): Band {
 /** Map a raw numeric total to its base band. */
 export function calculateBand(total: number): Band {
   if (total <= 80) return "low";
-  if (total <= 323) return "moderate";
-  if (total <= 1295) return "high";
+  if (total <= 500) return "moderate";
+  if (total <= 2000) return "high";
   return "critical";
 }
 
@@ -198,17 +198,27 @@ export function calculateEscalation(
     effectiveBand = maxBand(effectiveBand, "high");
   }
 
-  // Rule 2: Urgency = 9 AND Market access >= 6 → Critical
-  if (factors.urgency === 9 && factors.market_access !== null && factors.market_access >= 6) {
+  // Rule 2: Urgency = 9 → Critical
+  if (factors.urgency === 9) {
     reasons.push({
-      condition: "urgency_9_and_market_access_gte_6",
-      description: "Urgency = 9 and Market access ≥ 6 gives Critical",
+      condition: "urgency_9",
+      description: "Urgency = 9 gives Critical",
       resulting_band: "critical",
     });
     effectiveBand = maxBand(effectiveBand, "critical");
   }
 
-  // Rule 3: Forecast missed compliance deadline → Critical
+  // Rule 3: Market access = 9 AND Urgency >= 6 → Critical
+  if (factors.market_access === 9 && factors.urgency !== null && factors.urgency >= 6) {
+    reasons.push({
+      condition: "market_access_9_and_urgency_gte_6",
+      description: "Market access = 9 and Urgency ≥ 6 gives Critical",
+      resulting_band: "critical",
+    });
+    effectiveBand = maxBand(effectiveBand, "critical");
+  }
+
+  // Rule 4: Forecast missed compliance deadline → Critical
   if (deadline && forecast && asOfDate) {
     const deadlineMs = startOfDay(deadline.date_value).getTime();
     let missed = false;
@@ -236,7 +246,7 @@ export function calculateEscalation(
     }
   }
 
-  // Rule 3 also: confirmed overdue outstanding obligation
+  // Rule 4 also: confirmed overdue outstanding obligation
   if (deadline && asOfDate) {
     const daysRemaining = computeDaysRemaining(deadline.date_value, asOfDate);
     if (
