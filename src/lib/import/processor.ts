@@ -17,6 +17,7 @@ import { loadAiSettings } from "@/lib/ai/settings";
 import { startAiGrouping } from "@/lib/grouping/ai";
 import { refreshThemes } from "@/lib/grouping/themes";
 import { matchImportedProducts, type ProductMatchResult } from "./product-matching";
+import type { RowPlan } from "./match-plan";
 
 export interface ProcessResult {
   created: number;
@@ -25,6 +26,11 @@ export interface ProcessResult {
   skipped: number;
   invalid: number;
   conflicts: number;
+  /** Content matches: alerts whose content was replaced, rows left out, and rows added as new anyway. */
+  replaced: number;
+  ignored: number;
+  added_despite_match: number;
+  match_decisions?: Array<{ row: number; action: "replace" | "ignore" | "add"; score: number; alert_id: string | null; matched: string }>;
   errors: { rowNumber: number; message: string }[];
   /** Products matched from the file's Product column (suggested links; nothing is created). */
   products?: ProductMatchResult;
@@ -102,7 +108,7 @@ async function applyHumanReview(
   }
 }
 
-function computeRowHash(mapped: Partial<Record<ImportColumnName, string | null>>): string {
+export function computeRowHash(mapped: Partial<Record<ImportColumnName, string | null>>): string {
   const hash = crypto.createHash("sha256");
   const keys = Object.keys(mapped).sort();
   for (const key of keys) {
@@ -110,6 +116,15 @@ function computeRowHash(mapped: Partial<Record<ImportColumnName, string | null>>
     hash.update(`${key}:${val ?? ""}\n`);
   }
   return hash.digest("hex");
+}
+
+/** Notes entry for a match decision, signed by the person who confirmed the import. */
+async function decisionNote(client: DbClient, companyId: string, alertId: string, membershipId: string | null, action: string, body: string) {
+  await client.query(
+    `INSERT INTO alert_notes (company_id, alert_id, author_membership_id, body, visibility, kind, action)
+     VALUES ($1, $2, $3, $4, 'team', 'change', $5)`,
+    [companyId, alertId, membershipId, body.slice(0, 2000), action]
+  );
 }
 
 function mapRecommendation(raw: string | null): string {
@@ -123,7 +138,10 @@ export async function processImportBatch(
   companyId: string,
   feedId: string,
   rows: ValidatedRow[],
-  updateMode: "preserve" | "replace" = "preserve"
+  updateMode: "preserve" | "replace" = "preserve",
+  /** What to do with each row (match decisions); rows without a plan are matched by alert ID. */
+  plan: Map<number, RowPlan> = new Map(),
+  membershipId: string | null = null
 ): Promise<ProcessResult> {
   const result: ProcessResult = {
     created: 0,
@@ -132,6 +150,10 @@ export async function processImportBatch(
     skipped: 0,
     invalid: 0,
     conflicts: 0,
+    replaced: 0,
+    ignored: 0,
+    added_despite_match: 0,
+    match_decisions: [],
     errors: [],
     human_review: { flagged: 0, cleared: 0 },
   };
@@ -157,14 +179,30 @@ export async function processImportBatch(
       try {
         const alertId = row.parsed.alert_id as string;
         const rowHash = computeRowHash(row.mapped);
+        const todo = plan.get(row.rowNumber);
+
+        // Left out: a person chose Ignore, or another row of this file takes its place
+        if (todo?.action === "skip") {
+          await client.query(
+            `UPDATE import_rows SET row_hash = $1, external_alert_id = $2, state = 'skipped' WHERE batch_id = $3 AND row_number = $4`,
+            [rowHash, alertId, batchId, row.rowNumber]
+          );
+          if (todo.decision) result.ignored++;
+          else result.skipped++;
+          if (todo.decision) result.match_decisions!.push({ row: row.rowNumber, action: "ignore", score: todo.decision.score, alert_id: todo.decision.alertId, matched: todo.decision.title });
+          await client.query("RELEASE SAVEPOINT import_row");
+          continue;
+        }
+        // Added as a new alert although this ID is taken: the copy gets its own ID
+        if (todo?.action === "create" && todo.externalId) row.parsed.alert_id = todo.externalId;
 
         const existingResult = await client.query(
           `SELECT a.id, a.current_source_revision_id, a.record_version,
                   asr.row_hash
            FROM alerts a
            LEFT JOIN alert_source_revisions asr ON asr.id = a.current_source_revision_id
-           WHERE a.company_id = $1 AND a.feed_id = $2 AND a.external_alert_id = $3`,
-          [companyId, feedId, alertId]
+           WHERE a.company_id = $1 AND ${todo?.action === "update" ? "$2::uuid IS NOT NULL AND a.id = $3::uuid AND a.archived_at IS NULL" : "a.feed_id = $2 AND a.external_alert_id = $3"}`,
+          [companyId, feedId, todo?.action === "update" ? todo.alertId : row.parsed.alert_id]
         );
 
         await client.query(
@@ -173,6 +211,7 @@ export async function processImportBatch(
           [rowHash, alertId, batchId, row.rowNumber]
         );
 
+        if (todo?.action === "update" && existingResult.rows.length === 0) throw new Error("The alert to replace no longer exists");
         if (existingResult.rows.length === 0) {
           const newAlertId = await createAlert(client, companyId, feedId, row, batchId, rowHash);
           await applyHumanReview(client, companyId, newAlertId, row.parsed.needs_human_review as HumanReview, result);
@@ -182,6 +221,12 @@ export async function processImportBatch(
           );
           result.created++;
           touchedAlertIds.push(newAlertId);
+          if (todo?.decision?.action === "add") {
+            result.added_despite_match++;
+            result.match_decisions!.push({ row: row.rowNumber, action: "add", score: todo.decision.score, alert_id: todo.decision.alertId, matched: todo.decision.title });
+            await decisionNote(client, companyId, newAlertId, membershipId,
+              "Added as a new alert", `${todo.decision.score}% match with “${todo.decision.title}” — added as a new alert at import`);
+          }
         } else {
           const existing = existingResult.rows[0];
           if (existing.row_hash === rowHash) {
@@ -197,8 +242,15 @@ export async function processImportBatch(
               `UPDATE import_rows SET state = 'updated', alert_id = $1 WHERE batch_id = $2 AND row_number = $3`,
               [existing.id, batchId, row.rowNumber]
             );
-            result.updated++;
             touchedAlertIds.push(existing.id);
+            if (todo?.decision?.action === "replace") {
+              result.replaced++;
+              result.match_decisions!.push({ row: row.rowNumber, action: "replace", score: todo.decision.score, alert_id: existing.id, matched: todo.decision.title });
+              await decisionNote(client, companyId, existing.id, membershipId,
+                "Content replaced by import", `${todo.decision.score}% match — replaced with “${row.parsed.title as string}” (alert ID ${alertId} in the file). The earlier content stays in the source history.`);
+            } else {
+              result.updated++;
+            }
           }
         }
         await client.query("RELEASE SAVEPOINT import_row");

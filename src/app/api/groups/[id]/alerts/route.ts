@@ -35,11 +35,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
   const res = await query(
     `SELECT a.id, a.external_alert_id, a.title, a.stage, aap.effective_priority, aap.effective_total,
-            CASE WHEN a.primary_group_id = $1 THEN 'primary' ELSE 'related' END as relationship
+            'primary' AS relationship
      FROM alerts a
      LEFT JOIN alert_active_projections aap ON aap.alert_id = a.id AND aap.company_id = a.company_id
-     LEFT JOIN alert_group_links agl ON agl.alert_id = a.id AND agl.company_id = a.company_id AND agl.group_id = $1
-     WHERE (a.primary_group_id = $1 OR agl.group_id = $1) AND a.company_id = $2 AND a.archived_at IS NULL
+     WHERE a.primary_group_id = $1 AND a.company_id = $2 AND a.archived_at IS NULL
      ORDER BY a.title`,
     [id, auth.company_id]
   );
@@ -56,8 +55,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const body = await request.json();
   const { alert_id, relationship = "primary" } = body;
-  if (relationship !== "primary" && relationship !== "related") {
-    return NextResponse.json({ error: "Invalid relationship" }, { status: 400 });
+  // One alert is in one group at a time: adding it here moves it out of any other group
+  if (relationship !== "primary") {
+    return NextResponse.json({ error: "An alert can be in only one group. Adding it here moves it from its current group." }, { status: 400 });
   }
   if (typeof alert_id !== "string" || !(await canAccessAlert(auth, alert_id))) return alertNotFound();
   const comment = readChangeComment(request, body);
@@ -69,28 +69,21 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   );
   if (groupCheck.rows.length === 0) return NextResponse.json({ error: "Group not found" }, { status: 404 });
 
-  if (relationship === "primary") {
-    // Grouped by hand: the comment is the recorded basis, and automatic grouping won't move it again
-    await query(
-      `UPDATE alerts SET primary_group_id = $1, grouping_method = 'manual', grouping_confidence = NULL,
-              grouping_basis = $4, grouping_reviewed = TRUE, record_version = record_version + 1
-       WHERE id = $2 AND company_id = $3`,
-      [id, alert_id, auth.company_id, comment]
-    );
-    await refreshOwner(alert_id);
-  } else {
-    await query(
-      `INSERT INTO alert_group_links (company_id, alert_id, group_id, relationship, confirmed_by, confirmed_at)
-       VALUES ($1, $2, $3, $4, $5, now()) ON CONFLICT (alert_id, group_id) DO UPDATE SET relationship = $4
-       WHERE alert_group_links.company_id = $1`,
-      [auth.company_id, alert_id, id, relationship, auth.membership_id]
-    );
-  }
+  // Grouped by hand: the comment is the recorded basis, and automatic grouping won't move it again.
+  // Setting the one group replaces any previous group.
+  await query(
+    `UPDATE alerts SET primary_group_id = $1, grouping_method = 'manual', grouping_confidence = NULL,
+            grouping_basis = $4, grouping_reviewed = TRUE, record_version = record_version + 1
+     WHERE id = $2 AND company_id = $3`,
+    [id, alert_id, auth.company_id, comment]
+  );
+  // No second-group links (older "related" links are dropped)
+  await query(`DELETE FROM alert_group_links WHERE alert_id = $1 AND company_id = $2`, [alert_id, auth.company_id]);
+  await refreshOwner(alert_id);
 
   await createAuditEvent(auth.company_id, auth.membership_id, "link_alert", "regulation_group", id, null, { alert_id, relationship }, comment);
   const path = await groupPath(auth.company_id, id);
-  await addChangeNotes(auth.company_id, [alert_id], auth.membership_id,
-    relationship === "primary" ? `Moved to group ${path}` : `Linked as related to ${path}`, comment);
+  await addChangeNotes(auth.company_id, [alert_id], auth.membership_id, `Moved to group ${path}`, comment);
 
   return NextResponse.json({ success: true });
 }

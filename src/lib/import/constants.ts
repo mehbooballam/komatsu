@@ -56,7 +56,7 @@ export const NOT_IMPORTED = new Set<ImportColumnName>([]);
 
 /** v1 snapshot columns ("Was Priority Level", "Was Escalation Applied", "Was Source Context"): never imported. */
 export function isV1WasColumn(raw: string): boolean {
-  return /^was/i.test(raw.trim());
+  return /^was\b/i.test(raw.trim());
 }
 
 /** Older layout columns: still read when a file has them, but not in the templates. */

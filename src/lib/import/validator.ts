@@ -41,7 +41,7 @@ const US_DATE = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 const EU_DATE = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
 const SLASH_YMD = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/;
 
-function parseDate(value: string): { date: string; valid: boolean } {
+export function parseDate(value: string): { date: string; valid: boolean } {
   const trimmed = value.trim();
 
   if (ISO_DATE.test(trimmed)) {

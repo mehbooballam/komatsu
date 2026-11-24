@@ -25,6 +25,7 @@ import {
 interface ReviewItem {
   id: string;
   title: string;
+  group_id?: string | null;
   confidence: number;
   basis: string;
   group_path: string[];
@@ -109,6 +110,16 @@ export default function GroupsPage() {
   const [deciding, setDeciding] = useState(false);
   // Selected items that are still waiting for review (the list reloads after each decision)
   const reviewChosen = review.filter((i) => reviewSel.has(i.id));
+  // Suggestions shown per group: one alert is in one group, a group can hold several similar alerts
+  const reviewGroups = useMemo(() => {
+    const m = new Map<string, { key: string; path: string; items: ReviewItem[] }>();
+    for (const i of review) {
+      const key = i.group_id || i.group_path.join(" › ") || "none";
+      if (!m.has(key)) m.set(key, { key, path: i.group_path.join(" › ") || "Group", items: [] });
+      m.get(key)!.items.push(i);
+    }
+    return [...m.values()].sort((a, b) => b.items.length - a.items.length || a.path.localeCompare(b.path));
+  }, [review]);
   const [loading, setLoading] = useState(true);
   const { members } = useAssignables(canAssign);
 
@@ -664,42 +675,89 @@ export default function GroupsPage() {
             )}
           </header>
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-            {review.map((item) => (
-              <li key={item.id} className={`flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center ${reviewSel.has(item.id) ? "bg-blue-50/50 dark:bg-blue-500/5" : ""}`}>
-                {canEdit && (
-                  <input
-                    type="checkbox"
-                    aria-label={`Select ${item.title}`}
-                    checked={reviewSel.has(item.id)}
-                    onChange={(e) =>
-                      setReviewSel((s) => {
-                        const next = new Set(s);
-                        if (e.target.checked) next.add(item.id);
-                        else next.delete(item.id);
-                        return next;
-                      })
-                    }
-                    className="h-4 w-4 shrink-0 rounded border-slate-300 accent-[var(--primary)]"
-                  />
-                )}
-                <button type="button" onClick={() => setOpenAlert(item.id)} className="min-w-0 flex-1 text-left">
-                  <p className="truncate text-sm font-medium text-slate-900 hover:text-blue-600 dark:text-white" title={item.title}>{item.title}</p>
-                  <p className="truncate text-xs text-slate-500" title={item.basis}>
-                    In <strong className="font-medium text-slate-700 dark:text-slate-300">{item.group_path.join(" › ")}</strong> · {item.confidence}% · {item.basis}
-                  </p>
-                </button>
-                {canEdit && (
-                  <div className="flex shrink-0 gap-1.5">
-                    <button disabled={deciding} onClick={() => decide([item], "confirm")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50 dark:text-emerald-300 dark:ring-emerald-500/30 dark:hover:bg-emerald-500/10">
-                      <CheckCircle2 className="h-3.5 w-3.5" /> Confirm
-                    </button>
-                    <button disabled={deciding} onClick={() => decide([item], "reject")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-red-200 hover:bg-red-50 dark:text-red-300 dark:ring-red-500/30 dark:hover:bg-red-500/10">
-                      <X className="h-3.5 w-3.5" /> Reject
-                    </button>
+            {reviewGroups.map((grp) => {
+              const picked = grp.items.filter((i) => reviewSel.has(i.id)).length;
+              return (
+                <li key={grp.key}>
+                  {/* One suggested group, with all the similar alerts placed in it */}
+                  <div className="flex flex-col gap-2 bg-slate-50/70 px-4 py-2.5 sm:flex-row sm:items-center dark:bg-slate-800/30">
+                    {canEdit && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select all alerts in ${grp.path}`}
+                        checked={picked === grp.items.length}
+                        ref={(el) => {
+                          if (el) el.indeterminate = picked > 0 && picked < grp.items.length;
+                        }}
+                        onChange={(e) =>
+                          setReviewSel((s) => {
+                            const next = new Set(s);
+                            grp.items.forEach((i) => (e.target.checked ? next.add(i.id) : next.delete(i.id)));
+                            return next;
+                          })
+                        }
+                        className="h-4 w-4 shrink-0 rounded border-slate-300 accent-[var(--primary)]"
+                      />
+                    )}
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <FolderTree className="h-4 w-4 shrink-0 text-slate-400" />
+                      <span className="truncate text-sm font-semibold text-slate-900 dark:text-white" title={grp.path}>{grp.path}</span>
+                      <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700">
+                        {grp.items.length} alert{grp.items.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    {canEdit && grp.items.length > 1 && (
+                      <div className="flex shrink-0 gap-1.5">
+                        <button disabled={deciding} onClick={() => decide(grp.items, "confirm")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50 disabled:opacity-50 dark:text-emerald-300 dark:ring-emerald-500/30 dark:hover:bg-emerald-500/10">
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Confirm all {grp.items.length}
+                        </button>
+                        <button disabled={deciding} onClick={() => decide(grp.items, "reject")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50 dark:text-red-300 dark:ring-red-500/30 dark:hover:bg-red-500/10">
+                          <X className="h-3.5 w-3.5" /> Reject all {grp.items.length}
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </li>
-            ))}
+                  <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {grp.items.map((item) => (
+                      <li key={item.id} className={`flex flex-col gap-2 py-2.5 pl-10 pr-4 sm:flex-row sm:items-center ${reviewSel.has(item.id) ? "bg-blue-50/50 dark:bg-blue-500/5" : ""}`}>
+                        {canEdit && (
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${item.title}`}
+                            checked={reviewSel.has(item.id)}
+                            onChange={(e) =>
+                              setReviewSel((s) => {
+                                const next = new Set(s);
+                                if (e.target.checked) next.add(item.id);
+                                else next.delete(item.id);
+                                return next;
+                              })
+                            }
+                            className="h-4 w-4 shrink-0 rounded border-slate-300 accent-[var(--primary)]"
+                          />
+                        )}
+                        <button type="button" onClick={() => setOpenAlert(item.id)} className="min-w-0 flex-1 text-left">
+                          <p className="truncate text-sm font-medium text-slate-900 hover:text-blue-600 dark:text-white" title={item.title}>{item.title}</p>
+                          <p className="truncate text-xs text-slate-500" title={item.basis}>
+                            {item.confidence}% · {item.basis}
+                          </p>
+                        </button>
+                        {canEdit && (
+                          <div className="flex shrink-0 gap-1.5">
+                            <button disabled={deciding} onClick={() => decide([item], "confirm")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50 disabled:opacity-50 dark:text-emerald-300 dark:ring-emerald-500/30 dark:hover:bg-emerald-500/10">
+                              <CheckCircle2 className="h-3.5 w-3.5" /> Confirm
+                            </button>
+                            <button disabled={deciding} onClick={() => decide([item], "reject")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50 dark:text-red-300 dark:ring-red-500/30 dark:hover:bg-red-500/10">
+                              <X className="h-3.5 w-3.5" /> Reject
+                            </button>
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  X, Loader2, Columns3, Rows3, AlertTriangle, CheckCircle2, Sparkles, Save, RotateCcw, Trash2, Database, ChevronDown, Search, BookmarkCheck,
+  X, Loader2, Columns3, Rows3, AlertTriangle, CheckCircle2, Sparkles, Save, RotateCcw, Trash2, Database, ChevronDown, Search, BookmarkCheck, CopyCheck,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ImportMatches, type DecisionInput, type MatchesResponse } from "./import-matches";
 
 /* ---------- Types (GET /api/imports/[id]/preview) ---------- */
 
@@ -56,7 +57,7 @@ interface SavedMapping {
   updated_by_name: string | null;
 }
 
-type Tab = "mapping" | "rows" | "issues";
+type Tab = "mapping" | "matches" | "rows" | "issues";
 type MappingFilter = "all" | "mapped" | "skipped" | "changed";
 
 const ROW_LIMIT = 100;
@@ -175,6 +176,9 @@ export function ImportPreview({
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  // Rows that match other alerts by content, and what to do with them
+  const [matches, setMatches] = useState<MatchesResponse | null>(null);
+  const [matchBusy, setMatchBusy] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/imports/${batchId}/preview`);
@@ -187,6 +191,13 @@ export function ImportPreview({
     setDraft(Object.fromEntries((json as PreviewResponse).mapping.columns.map((c) => [c.header, c.target])));
   }, [batchId]);
 
+  const loadMatches = useCallback(async () => {
+    const res = await fetch(`/api/imports/${batchId}/matches`);
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) setMatches(json);
+    else setFlash({ ok: false, text: json.error || "Could not compare the rows with your alerts" });
+  }, [batchId]);
+
   const loadSaved = useCallback(async () => {
     const res = await fetch("/api/imports/mappings");
     if (res.ok) setSaved((await res.json()).mappings || []);
@@ -195,7 +206,8 @@ export function ImportPreview({
   useEffect(() => {
     void load(); // eslint-disable-line react-hooks/set-state-in-effect
     void loadSaved();
-  }, [load, loadSaved]);
+    void loadMatches();
+  }, [load, loadSaved, loadMatches]);
 
   useEffect(() => {
     if (!flash) return;
@@ -258,7 +270,29 @@ export function ImportPreview({
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json.error || "Could not apply the mapping");
-    await load();
+    await Promise.all([load(), loadMatches()]);
+  }
+
+  /** Saves match decisions or the match percentage; the server answers with the updated matches. */
+  async function putMatches(body: { decisions?: DecisionInput[]; threshold?: number }) {
+    setMatchBusy(true);
+    try {
+      const res = await fetch(`/api/imports/${batchId}/matches`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok) setMatches(json);
+      else {
+        setFlash({ ok: false, text: json.error || "Could not save the decision" });
+        await loadMatches();
+      }
+    } catch {
+      setFlash({ ok: false, text: "Could not save the decision. Check your connection and try again." });
+    } finally {
+      setMatchBusy(false);
+    }
   }
 
   async function apply() {
@@ -341,7 +375,8 @@ export function ImportPreview({
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         setFlash({ ok: false, text: json.problems?.[0] || json.error || "Import failed" });
-        await load();
+        await Promise.all([load(), loadMatches()]);
+        if (json.undecided || json.conflicts) setTab("matches");
         return;
       }
       onImported(json);
@@ -386,6 +421,9 @@ export function ImportPreview({
     return true;
   });
   const canImport = !dirty ? problems.length === 0 && counts.new + counts.update > 0 : draftProblems.length === 0;
+  const toDecide = (matches?.undecided ?? 0) + (matches?.conflicts ?? 0);
+  const contentMatches = matches?.rows.filter((r) => r.kind === "content").length ?? 0;
+  const toImport = matches ? matches.totals.create + matches.totals.update : counts.new + counts.update;
   const profile = data?.mapping.profile ?? null;
 
   return (
@@ -404,8 +442,15 @@ export function ImportPreview({
           </div>
           {data && (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-              <span className="rounded-lg bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">New {counts.new}</span>
-              <span className="rounded-lg bg-blue-50 px-2.5 py-1 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">Update {counts.update}</span>
+              <span className="rounded-lg bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">New {matches ? matches.totals.create - matches.undecided : counts.new}</span>
+              <span className="rounded-lg bg-blue-50 px-2.5 py-1 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">Update {matches ? matches.totals.update : counts.update}</span>
+              {!!matches?.totals.unchanged && <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">Unchanged {matches.totals.unchanged}</span>}
+              {!!matches?.totals.skip && <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">Left out {matches.totals.skip}</span>}
+              {contentMatches > 0 && (
+                <button type="button" onClick={() => setTab("matches")} className="rounded-lg bg-amber-50 px-2.5 py-1 font-medium text-amber-800 hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300">
+                  {matches?.undecided ? `To decide ${matches.undecided}` : `Matches ${contentMatches}`}
+                </button>
+              )}
               <span className={`rounded-lg px-2.5 py-1 font-medium ${counts.invalid ? "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300" : "bg-slate-100 text-slate-500 dark:bg-slate-800"}`}>Invalid {counts.invalid}</span>
               <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200">Rows {counts.total}</span>
               <span className="mx-1 hidden h-5 w-px bg-slate-200 sm:block dark:bg-slate-700" />
@@ -421,6 +466,7 @@ export function ImportPreview({
         <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-200 px-3 sm:px-5 dark:border-slate-700" role="tablist">
           {([
             ["mapping", "Column mapping", Columns3, problems.length || null],
+            ["matches", "Matches", CopyCheck, toDecide || null],
             ["rows", "Rows", Rows3, null],
             ["issues", "Issues", AlertTriangle, issues.length || null],
           ] as const).map(([key, label, Icon, badge]) => (
@@ -435,7 +481,7 @@ export function ImportPreview({
             >
               <Icon className="h-4 w-4" /> {label}
               {badge != null && (
-                <span className={`rounded-full px-1.5 text-xs ${key === "mapping" ? "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>{badge}</span>
+                <span className={`rounded-full px-1.5 text-xs ${key === "matches" ? "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300" : key === "mapping" ? "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>{badge}</span>
               )}
             </button>
           ))}
@@ -614,6 +660,17 @@ export function ImportPreview({
             </div>
           )}
 
+          {data && tab === "matches" && (
+            <ImportMatches
+              batchId={batchId}
+              data={matches}
+              busy={matchBusy || !!busy}
+              stale={dirty}
+              onDecide={(decisions) => void putMatches({ decisions })}
+              onThreshold={(threshold) => void putMatches({ threshold })}
+            />
+          )}
+
           {data && tab === "rows" && (
             <div className="p-4 sm:p-6">
               <p className="mb-2 text-xs text-slate-500">
@@ -707,12 +764,22 @@ export function ImportPreview({
               </button>
             )}
             <button
-              onClick={runImport}
-              disabled={!!busy || !data || !canImport}
+              onClick={!dirty && toDecide > 0 ? () => setTab("matches") : runImport}
+              disabled={!!busy || matchBusy || !data || !matches || !canImport || (!dirty && toDecide > 0 && tab === "matches")}
               className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
             >
               {busy === "import" && <Loader2 className="h-4 w-4 animate-spin" />}
-              {busy === "import" ? "Importing…" : dirty ? "Apply mapping & import" : `Import ${counts.new + counts.update} alerts`}
+              {busy === "import"
+                ? "Importing…"
+                : dirty
+                  ? "Apply mapping & import"
+                  : !matches
+                    ? "Checking for matches…"
+                    : toDecide > 0
+                      ? `Decide ${toDecide} match${toDecide === 1 ? "" : "es"}`
+                      : toImport > 0
+                        ? `Import ${toImport} alert${toImport === 1 ? "" : "s"}`
+                        : "Finish import"}
             </button>
           </div>
         </div>

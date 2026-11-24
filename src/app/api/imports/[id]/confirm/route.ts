@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { canImport, forbidden, getAuth, unauthorized } from "@/lib/auth-helpers";
 import { processImportBatch } from "@/lib/import/processor";
-import { validateRows, type ValidatedRow } from "@/lib/import/validator";
-import { mappingProblems, rowsFromRaw, type ColumnMapping } from "@/lib/import/mapping";
+import { mappingProblems, type ColumnMapping } from "@/lib/import/mapping";
+import { loadImportMatches } from "@/lib/import/match-plan";
 
 // Imports and AI grouping runs (which continue after the response) can take minutes
 export const maxDuration = 300;
@@ -23,7 +23,7 @@ export async function POST(
   const claimed = await query(
     `UPDATE import_batches SET status = 'processing', started_at = now()
      WHERE id = $1 AND company_id = $2 AND status = 'previewing'
-     RETURNING feed_id, update_mode, column_mapping, mapping_profile_id`,
+     RETURNING id, feed_id, update_mode, column_mapping, mapping_profile_id, match_threshold`,
     [id, auth.company_id]
   );
   const batch = claimed.rows[0];
@@ -42,11 +42,6 @@ export async function POST(
   }
 
   try {
-    const rowsResult = await query(
-      `SELECT row_number, raw_payload FROM import_rows WHERE batch_id = $1 ORDER BY row_number`,
-      [id]
-    );
-
     // Restore the batch's column mapping (as reviewed in the preview) and use the same validation.
     const columnMapping: ColumnMapping = batch.column_mapping || {};
     const problems = mappingProblems(columnMapping);
@@ -54,7 +49,42 @@ export async function POST(
       await query(`UPDATE import_batches SET status = 'previewing', started_at = NULL WHERE id = $1`, [id]);
       return NextResponse.json({ error: "Fix the column mapping first", problems }, { status: 400 });
     }
-    const validatedRows: ValidatedRow[] = validateRows(rowsFromRaw(rowsResult.rows, columnMapping)).rows;
+    // Rows that match another alert by content are imported only after a person decided what to do with them
+    const matches = await loadImportMatches(auth.company_id, batch);
+    if (matches.undecided || matches.conflicts) {
+      await query(`UPDATE import_batches SET status = 'previewing', started_at = NULL WHERE id = $1`, [id]);
+      const n = matches.undecided || matches.conflicts;
+      return NextResponse.json(
+        {
+          error: matches.undecided
+            ? `${n} row${n === 1 ? " matches" : "s match"} other alerts. Choose Replace, Ignore or Add as new first.`
+            : `${n} decision${n === 1 ? "" : "s"} can't be carried out. Check the matches.`,
+          undecided: matches.undecided,
+          conflicts: matches.conflicts,
+        },
+        { status: 409 }
+      );
+    }
+    // Keep decisions carried over from an earlier import with this one too
+    const carried = matches.rows.filter((m) => m.source === "earlier" && m.decision);
+    if (carried.length) {
+      await query(
+        `UPDATE import_rows ir SET decision = v.decision, decision_target = v.decision_target, decision_score = v.decision_score
+         FROM jsonb_to_recordset($2::jsonb) AS v(row_number int, decision text, decision_target text, decision_score smallint)
+         WHERE ir.batch_id = $1 AND ir.row_number = v.row_number`,
+        [
+          id,
+          JSON.stringify(
+            carried.map((m) => ({
+              row_number: m.row,
+              decision: m.decision,
+              decision_target: m.target,
+              decision_score: m.matches.find((x) => x.target === m.target)?.score ?? null,
+            }))
+          ),
+        ]
+      );
+    }
     if (batch.mapping_profile_id) {
       await query(`UPDATE import_mapping_profiles SET last_used_at = now() WHERE id = $1`, [batch.mapping_profile_id]);
     }
@@ -62,8 +92,10 @@ export async function POST(
       id,
       auth.company_id,
       batch.feed_id,
-      validatedRows,
-      batch.update_mode || "preserve"
+      matches.validated,
+      batch.update_mode || "preserve",
+      matches.plan,
+      auth.membership_id
     );
 
     return NextResponse.json({

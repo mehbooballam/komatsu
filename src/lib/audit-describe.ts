@@ -336,9 +336,10 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
         changes: [],
       };
     case "import_completed": {
-      const parts = (["created", "updated", "unchanged", "skipped", "invalid", "conflicts"] as const)
+      const parts = (["created", "replaced", "updated", "unchanged", "ignored", "skipped", "invalid", "conflicts"] as const)
         .filter((k) => Number(a[k]) > 0)
         .map((k) => `${Number(a[k]).toLocaleString()} ${k}`);
+      if (Number(a.added_despite_match) > 0) parts.push(`${Number(a.added_despite_match).toLocaleString()} added as new despite a match`);
       return {
         category: "imports",
         summary: ["Completed the import of ", named(e.entity_id, refs, null, "a file")],

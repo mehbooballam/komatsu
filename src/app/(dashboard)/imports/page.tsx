@@ -189,7 +189,7 @@ export default function ImportsPage() {
 
   function showResult(data: { counts?: Record<string, unknown> }) {
     const c = (data.counts || {}) as {
-      created?: number; updated?: number; unchanged?: number; skipped?: number;
+      created?: number; updated?: number; unchanged?: number; skipped?: number; replaced?: number; ignored?: number;
       errors?: Array<{ rowNumber: number; message: string }>;
       products?: Notice["products"]; human_review?: Notice["humanReview"];
     };
@@ -201,10 +201,12 @@ export default function ImportsPage() {
         { label: "Created", value: c.created ?? 0 },
         { label: "Updated", value: c.updated ?? 0 },
         { label: "Unchanged", value: c.unchanged ?? 0 },
+        ...(c.replaced ? [{ label: "Replaced", value: c.replaced }] : []),
+        ...(c.ignored ? [{ label: "Ignored", value: c.ignored }] : []),
         { label: "Skipped", value: c.skipped ?? 0 },
       ],
       errors: rowErrors.map((e) => (e.rowNumber ? `Row ${e.rowNumber}: ${e.message}` : e.message)),
-      showAlertsLink: (c.created ?? 0) + (c.updated ?? 0) > 0,
+      showAlertsLink: (c.created ?? 0) + (c.updated ?? 0) + (c.replaced ?? 0) > 0,
       products: c.products,
       humanReview: c.human_review,
     });
