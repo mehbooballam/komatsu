@@ -24,6 +24,8 @@ export interface GroupDrawerProps {
   labels: GroupLabel[];
   members: Member[];
   canEdit: boolean;
+  /** Deleting groups is switched on in Settings › Workspace */
+  canDelete?: boolean;
   canAssign: boolean;
   /** Tab to open on (e.g. "versions" when the alert count was clicked) */
   initialTab?: Tab;
@@ -201,7 +203,7 @@ export function GroupDrawer(props: GroupDrawerProps) {
                       <Plus className="h-4 w-4 text-slate-500" /> {g.level === "family" ? "Add action" : "Add sub-group"}
                     </button>
                   )}
-                  {canEdit && (
+                  {canEdit && props.canDelete && (
                     <>
                       <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
                       <button onClick={() => { setMenuOpen(false); props.onDelete(g); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10">

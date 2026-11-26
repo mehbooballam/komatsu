@@ -200,6 +200,14 @@ export function describeEvent(e: AuditEventLike, refs: Refs): Described {
       return { category: "workspace", summary: ["Created the workspace ", { b: String(a.name ?? "") }], changes: [] };
     case "workspace_updated":
       return { category: "workspace", summary: ["Updated workspace settings"], changes: diff(null, after, refs) };
+    case "delete_settings_updated": {
+      const names: Record<string, string> = { allow_delete_alerts: "Delete alerts", allow_delete_groups: "Delete regulation groups", allow_delete_products: "Delete products" };
+      return {
+        category: "workspace",
+        summary: ["Changed which items can be deleted"],
+        changes: Object.entries(a).map(([k, v]) => ({ label: names[k] ?? k, before: b[k] === true ? "On" : "Off", after: v === true ? "On" : "Off" })),
+      };
+    }
     case "workspace_branding_updated":
       return { category: "workspace", summary: ["Changed the workspace ", { b: String(a.image ?? "image").toLowerCase() }], changes: [] };
     case "workspace_branding_removed":

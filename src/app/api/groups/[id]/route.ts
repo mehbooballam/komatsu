@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { refuseIfDeleteOff } from "@/lib/delete-settings-server";
 import { query, getClient } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, canAssign, createAuditEvent } from "@/lib/auth-helpers";
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
@@ -148,6 +149,8 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   if (!auth) return unauthorized();
   if (!hasCompanyWideAccess(auth.role, auth.access_scope)) return forbidden();
   if (!canEdit(auth.role)) return forbidden();
+  const off = await refuseIfDeleteOff(auth.company_id, "groups");
+  if (off) return off;
   const { id } = await params;
   const comment = readChangeComment(request);
   if (!comment) return commentRequired();

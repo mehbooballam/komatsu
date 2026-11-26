@@ -15,6 +15,7 @@ import { ConfirmDialog } from "@/components/alerts/confirm-dialog";
 import { groupColor, useAssignables, MemberPicker, MAX_GROUP_DEPTH } from "@/components/alerts/alerts-table";
 import { useSessionInfo } from "@/components/layout/session-context";
 import { canMakeChanges } from "@/lib/auth/permissions";
+import { isDeleteAllowed } from "@/lib/delete-settings";
 import { GroupDrawer } from "@/components/groups/group-drawer";
 import { AiGroupingDialog } from "@/components/groups/ai-grouping-dialog";
 import {
@@ -100,6 +101,8 @@ export default function GroupsPage() {
   // Reviewers and risk owners can only look
   const canEdit = canMakeChanges(role);
   const canAssign = role === "company_admin" || role === "manager";
+  // Deleting groups is switched on or off in Settings › Workspace
+  const canDelete = canEdit && isDeleteAllowed(session?.company.settings, "groups");
 
   const [groups, setGroups] = useState<Group[]>([]);
   const [alerts, setAlerts] = useState<GroupAlert[]>([]);
@@ -892,13 +895,13 @@ export default function GroupsPage() {
                     </PopoverContent>
                   </Popover>
                 )}
-                <button
+                {canDelete && <button
                   disabled={bulkBusy}
                   onClick={() => setBulkDelete(true)}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/90 px-3 py-1.5 text-sm font-medium hover:bg-red-500 disabled:opacity-50"
                 >
                   <Trash2 className="h-4 w-4" /> Delete
-                </button>
+                </button>}
                 {bulkBusy && <Loader2 className="h-4 w-4 animate-spin" />}
                 <button onClick={() => setSelected(new Set())} className="ml-auto rounded-lg px-2 py-1 text-sm text-white/70 hover:bg-white/10 hover:text-white">
                   Clear
@@ -1064,10 +1067,10 @@ export default function GroupsPage() {
                                   <button onClick={() => { setMenuFor(null); openEdit(g); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-slate-100 dark:hover:bg-slate-800">
                                     <Pencil className="h-4 w-4 text-slate-500" /> Edit or move
                                   </button>
-                                  <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
-                                  <button onClick={() => { setMenuFor(null); setPendingDelete(g); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10">
+                                  {canDelete && <div className="my-1 border-t border-slate-100 dark:border-slate-800" />}
+                                  {canDelete && <button onClick={() => { setMenuFor(null); setPendingDelete(g); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10">
                                     <Trash2 className="h-4 w-4" /> Delete
-                                  </button>
+                                  </button>}
                                 </>
                               )}
                             </PopoverContent>
@@ -1133,6 +1136,7 @@ export default function GroupsPage() {
           labels={labels}
           members={members}
           canEdit={canEdit}
+          canDelete={canDelete}
           canAssign={canAssign}
           initialTab={drawer!.tab}
           paused={!!openAlert || !!form || !!pendingDelete}

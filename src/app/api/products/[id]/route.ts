@@ -3,6 +3,7 @@ import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { UUID_RE, canDeleteInventory, deleteInventory } from "@/lib/inventory";
+import { refuseIfDeleteOff } from "@/lib/delete-settings-server";
 import { matchImportedProducts } from "@/lib/import/product-matching";
 
 async function findFamily(companyId: string, id: string) {
@@ -95,6 +96,8 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   const auth = await getAuth();
   if (!auth) return unauthorized();
   if (!canDeleteInventory(auth.role)) return forbidden();
+  const off = await refuseIfDeleteOff(auth.company_id, "products");
+  if (off) return off;
   const { id } = await params;
   const family = await findFamily(auth.company_id, id);
   if (!family) return NextResponse.json({ error: "Not found" }, { status: 404 });

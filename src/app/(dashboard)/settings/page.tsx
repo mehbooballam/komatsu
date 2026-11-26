@@ -2,12 +2,13 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Save, SlidersHorizontal, Building2, Upload, ImageIcon, RotateCcw, Calculator, History, ShieldAlert, Check, Loader2, Info, Lock, Sparkles,
+  Save, SlidersHorizontal, Building2, Upload, ImageIcon, RotateCcw, Calculator, History, ShieldAlert, Check, Loader2, Info, Lock, Sparkles, Trash2,
 } from "lucide-react";
 import { AiGroupingSettings } from "@/components/settings/ai-grouping-settings";
 import { useSessionInfo, useRefreshSession } from "@/components/layout/session-context";
 import { ImageUpload } from "@/components/ui/image-upload";
 import { ConfirmDialog } from "@/components/alerts/confirm-dialog";
+import { DELETE_KINDS, DELETE_LABELS, isDeleteAllowed, type DeleteKind } from "@/lib/delete-settings";
 import {
   BANDS, FACTOR_KEYS, FACTOR_LABELS, FORMULA_TEXT, MAX_TOTAL, RATING_VALUES,
   bandForTotal, escalationText, factorEscalations, maxBand, validatePolicy,
@@ -544,8 +545,73 @@ function GeneralSettings() {
         )}
       </div>
     </Section>
+    <DeleteSettings />
     <BrandingSettings />
     </div>
+  );
+}
+
+/** Switches deleting on or off for alerts, regulation groups and products (administrators). */
+function DeleteSettings() {
+  const session = useSessionInfo();
+  const refreshSession = useRefreshSession();
+  const isAdmin = session?.membership.role === "company_admin";
+  const settings = session?.company.settings;
+  const [busy, setBusy] = useState<DeleteKind | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [confirmOn, setConfirmOn] = useState<DeleteKind | null>(null);
+
+  const save = async (kind: DeleteKind, on: boolean) => {
+    setBusy(kind);
+    setMsg(null);
+    const res = await fetch("/api/workspaces/current", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ allow_delete: { [kind]: on } }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) await refreshSession();
+    setBusy(null);
+    setMsg(res.ok ? { ok: true, text: `${DELETE_LABELS[kind].title} turned ${on ? "on" : "off"}` } : { ok: false, text: body.error || "Could not save" });
+  };
+
+  return (
+    <Section title="Deleting" subtitle="Show or hide the delete options. Each type is switched on separately; all are off by default." icon={Trash2}>
+      {!isAdmin && <p className="mb-4 text-sm text-[var(--muted-foreground)]">Only administrators can change these settings.</p>}
+      <div className="max-w-2xl divide-y divide-slate-100 dark:divide-slate-800">
+        {DELETE_KINDS.map((kind) => {
+          const on = isDeleteAllowed(settings, kind);
+          return (
+            <div key={kind} className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-white">
+                  {DELETE_LABELS[kind].title}
+                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${on ? "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300" : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"}`}>{on ? "On" : "Off"}</span>
+                </p>
+                <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">{DELETE_LABELS[kind].hint}</p>
+              </div>
+              <span className="flex items-center gap-2">
+                {busy === kind && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
+                <Toggle checked={on} disabled={!isAdmin || !!busy} label={DELETE_LABELS[kind].title} onChange={(v) => (v ? setConfirmOn(kind) : void save(kind, false))} />
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {msg && <p className={`mt-3 text-sm ${msg.ok ? "text-emerald-600" : "text-red-600"}`}>{msg.text}</p>}
+      <ConfirmDialog
+        open={!!confirmOn}
+        title={confirmOn ? `Turn on ${DELETE_LABELS[confirmOn].title.toLowerCase()}?` : ""}
+        description={confirmOn ? `${DELETE_LABELS[confirmOn].hint} The delete options appear for administrators and managers until you turn this off again.` : ""}
+        confirmLabel="Turn on"
+        onClose={() => setConfirmOn(null)}
+        onConfirm={async () => {
+          const k = confirmOn!;
+          setConfirmOn(null);
+          await save(k, true);
+        }}
+      />
+    </Section>
   );
 }
 

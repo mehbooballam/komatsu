@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuth, createAuditEvent } from "@/lib/auth-helpers";
 import { deleteAlerts } from "@/lib/alerts/delete";
-import { ALERT_DELETE_ENABLED } from "@/lib/auth/permissions";
+import { refuseIfDeleteOff } from "@/lib/delete-settings-server";
 
 /**
  * POST /api/alerts/delete
  *   { ids: string[] }                                   delete selected alerts (admin or manager)
  *   { all: true, confirm: "DELETE", include_imports? }  delete every alert in the workspace (admin only)
+ * Only when deleting alerts is switched on in Settings › Workspace.
  */
 export async function POST(request: NextRequest) {
   const auth = await getAuth();
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!ALERT_DELETE_ENABLED) return NextResponse.json({ error: "Deleting alerts is turned off" }, { status: 403 });
+  const off = await refuseIfDeleteOff(auth.company_id, "alerts");
+  if (off) return off;
 
   const body = await request.json().catch(() => ({}));
   const { ids, all, confirm, include_imports } = body as {

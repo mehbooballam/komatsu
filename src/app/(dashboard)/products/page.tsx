@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { ConfirmDialog } from "@/components/alerts/confirm-dialog";
 import { useSessionInfo } from "@/components/layout/session-context";
 import { canMakeChanges, hasCompanyWideAccess } from "@/lib/auth/permissions";
+import { isDeleteAllowed } from "@/lib/delete-settings";
 
 interface Model {
   id: string;
@@ -81,7 +82,8 @@ export default function ProductsPage() {
   const session = useSessionInfo();
   const role = session?.membership.role;
   const canEdit = !!session && canMakeChanges(session.membership.role) && hasCompanyWideAccess(session.membership.role, session.membership.access_scope);
-  const canDelete = role === "company_admin" || role === "manager";
+  // Deleting products is switched on or off in Settings › Workspace
+  const canDelete = (role === "company_admin" || role === "manager") && isDeleteAllowed(session?.company.settings, "products");
 
   const [families, setFamilies] = useState<Family[]>([]);
   // Product names in imported alerts that the inventory does not have yet

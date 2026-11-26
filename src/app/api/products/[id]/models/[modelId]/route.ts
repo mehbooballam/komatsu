@@ -3,6 +3,7 @@ import { query } from "@/lib/db";
 import { getAuth, unauthorized, forbidden, canEdit, createAuditEvent } from "@/lib/auth-helpers";
 import { hasCompanyWideAccess } from "@/lib/auth/permissions";
 import { UUID_RE, canDeleteInventory, deleteInventory } from "@/lib/inventory";
+import { refuseIfDeleteOff } from "@/lib/delete-settings-server";
 import { matchImportedProducts } from "@/lib/import/product-matching";
 
 type Params = { params: Promise<{ id: string; modelId: string }> };
@@ -66,6 +67,8 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
   const auth = await getAuth();
   if (!auth) return unauthorized();
   if (!canDeleteInventory(auth.role)) return forbidden();
+  const off = await refuseIfDeleteOff(auth.company_id, "products");
+  if (off) return off;
   const { id, modelId } = await params;
   const model = await findModel(auth.company_id, id, modelId);
   if (!model) return NextResponse.json({ error: "Not found" }, { status: 404 });
